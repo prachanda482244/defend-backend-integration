@@ -13,10 +13,34 @@ const createReport = asyncHandler(async (req, res) => {
 
   return res.status(200).json(new ApiResponse(200, report, "report added"));
 });
+
 const reportDetails = asyncHandler(async (req, res) => {
   const report = await Report.find();
   if (!report) throw new ApiError(400, "Report not found");
-  return res.status(200).json(new ApiResponse(200, report, "report details"));
+
+  const ageCounts = report.reduce((acc, item) => {
+    acc[item.age] = (acc[item.age] || 0) + 1;
+    return acc;
+  }, {});
+
+  const stateCounts = report.reduce((acc, item) => {
+    acc[item.state] = (acc[item.state] || 0) + 1;
+    return acc;
+  }, {});
+
+  const cityCounts = report.reduce((acc, item) => {
+    acc[item.city] = (acc[item.city] || 0) + 1;
+    return acc;
+  }, {});
+
+  const result = {
+    ageCounts,
+    stateCounts,
+    cityCounts,
+    totalRecords: report.length,
+  };
+
+  return res.status(200).json(new ApiResponse(200, result, "report details"));
 });
 
 const filteredByAge = asyncHandler(async (req, res) => {
