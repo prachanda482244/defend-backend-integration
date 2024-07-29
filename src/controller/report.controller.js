@@ -33,10 +33,25 @@ const reportDetails = asyncHandler(async (req, res) => {
     return acc;
   }, {});
 
+  const ageArray = Object.keys(ageCounts).map((key) => ({
+    age: key,
+    count: ageCounts[key],
+  }));
+
+  const stateArray = Object.keys(stateCounts).map((key) => ({
+    state: key,
+    count: stateCounts[key],
+  }));
+
+  const cityArray = Object.keys(cityCounts).map((key) => ({
+    city: key,
+    count: cityCounts[key],
+  }));
+
   const result = {
-    ageCounts,
-    stateCounts,
-    cityCounts,
+    ageCounts: ageArray,
+    stateCounts: stateArray,
+    cityCounts: cityArray,
     totalRecords: report.length,
   };
 
