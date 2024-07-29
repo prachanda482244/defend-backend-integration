@@ -20,6 +20,7 @@ const reportDetails = asyncHandler(async (req, res) => {
 });
 
 const filteredByAge = asyncHandler(async (req, res) => {
+  const totalDocsCount = await Report.countDocuments();
   const { age } = req.query;
 
   const report = await Report.find({ age: age });
@@ -34,6 +35,7 @@ const filteredByAge = asyncHandler(async (req, res) => {
   const response = {
     ageGroupDetails: object,
     totalCount: report.length,
+    percentage: `${Math.floor((report.length / totalDocsCount) * 100)} %`,
   };
   return res
     .status(200)
@@ -55,6 +57,7 @@ const filteredByMedication = asyncHandler(async (req, res) => {
   const response = {
     medicationGroupDetails: object,
     totalCount: report.length,
+    percentage: `${Math.floor((report.length / totalDocsCount) * 100)} %`,
   };
   return res
     .status(200)
@@ -75,6 +78,7 @@ const filteredByState = asyncHandler(async (req, res) => {
   const response = {
     medicationGroupDetails: object,
     totalCount: report.length,
+    percentage: `${Math.floor((report.length / totalDocsCount) * 100)} %`,
   };
   return res
     .status(200)
