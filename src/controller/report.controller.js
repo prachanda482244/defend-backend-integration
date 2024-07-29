@@ -22,6 +22,10 @@ const reportDetails = asyncHandler(async (req, res) => {
     acc[item.age] = (acc[item.age] || 0) + 1;
     return acc;
   }, {});
+  const medicationCounts = report.reduce((acc, item) => {
+    acc[item.medication] = (acc[item.medication] || 0) + 1;
+    return acc;
+  }, {});
 
   const stateCounts = report.reduce((acc, item) => {
     acc[item.state] = (acc[item.state] || 0) + 1;
@@ -42,7 +46,10 @@ const reportDetails = asyncHandler(async (req, res) => {
     state: key,
     count: stateCounts[key],
   }));
-
+  const medicationArray = Object.keys(medicationCounts).map((key) => ({
+    medication: key,
+    count: medicationCounts[key],
+  }));
   const cityArray = Object.keys(cityCounts).map((key) => ({
     city: key,
     count: cityCounts[key],
@@ -50,6 +57,7 @@ const reportDetails = asyncHandler(async (req, res) => {
 
   const result = {
     ageCounts: ageArray,
+    medicationCounts: medicationArray,
     stateCounts: stateArray,
     cityCounts: cityArray,
     totalRecords: report.length,
