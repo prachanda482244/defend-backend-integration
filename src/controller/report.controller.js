@@ -43,6 +43,8 @@ const filteredByAge = asyncHandler(async (req, res) => {
 });
 
 const filteredByMedication = asyncHandler(async (req, res) => {
+  const totalDocsCount = await Report.countDocuments();
+
   const { medication } = req.query;
 
   const report = await Report.find({ medication });
@@ -64,6 +66,8 @@ const filteredByMedication = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, response, "Records fetched"));
 });
 const filteredByState = asyncHandler(async (req, res) => {
+  const totalDocsCount = await Report.countDocuments();
+
   const { state, city } = req.query;
 
   const report = await Report.find({ $or: [{ state }, { city }] });
