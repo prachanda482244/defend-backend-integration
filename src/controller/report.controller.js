@@ -41,26 +41,29 @@ const reportDetails = asyncHandler(async (req, res) => {
   const ageArray = Object.keys(ageCounts).map((key) => ({
     age: key,
     count: ageCounts[key],
-    percentage: ((ageCounts[key] / totalRecords) * 100).toFixed(2) + " %",
+    percentage: parseFloat(((ageCounts[key] / totalRecords) * 100).toFixed(2)),
   }));
 
   const medicationArray = Object.keys(medicationCounts).map((key) => ({
     medication: key,
     count: medicationCounts[key],
-    percentage:
-      ((medicationCounts[key] / totalRecords) * 100).toFixed(2) + " %",
+    percentage: parseFloat(
+      ((medicationCounts[key] / totalRecords) * 100).toFixed(2)
+    ),
   }));
 
   const stateArray = Object.keys(stateCounts).map((key) => ({
     state: key,
     count: stateCounts[key],
-    percentage: ((stateCounts[key] / totalRecords) * 100).toFixed(2) + " %",
+    percentage: parseFloat(
+      ((stateCounts[key] / totalRecords) * 100).toFixed(2)
+    ),
   }));
 
   const cityArray = Object.keys(cityCounts).map((key) => ({
     city: key,
     count: cityCounts[key],
-    percentage: ((cityCounts[key] / totalRecords) * 100).toFixed(2) + " %",
+    percentage: parseFloat(((cityCounts[key] / totalRecords) * 100).toFixed(2)),
   }));
 
   const result = {
