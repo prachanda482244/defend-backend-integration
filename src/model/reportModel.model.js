@@ -21,6 +21,13 @@ const reportSchema = new Schema(
       type: String,
       required: true,
     },
+    ipAddress: {
+      type: String,
+      required: true,
+    },
+    lastSubmission: {
+      type: Date,
+    },
   },
   { timestamps: true }
 );

@@ -4,21 +4,41 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 const createReport = asyncHandler(async (req, res) => {
-  const { age, medication, state, city } = req.body;
+  const { age, medication, state, city, ipAddress } = req.body;
   if ([medication, state, city].some((field) => field.trim() === "")) {
     throw new ApiError(400, "All field required");
   }
   const location = `${state} ${city}`;
-  const report = await Report.create({
-    age,
-    medication,
-    state,
-    city,
-    location,
-  });
-  if (!report) throw new ApiError(400, "Failed to create the report");
+  const currentTime = new Date();
 
-  return res.status(200).json(new ApiResponse(200, report, "report added"));
+  let submission = await Report.findOne({ ipAddress });
+
+  if (submission) {
+    const timeDifference =
+      (currentTime - submission.lastSubmission) / (1000 * 60 * 60); // in hours
+    if (timeDifference < 36) {
+      return res.status(429).json({
+        message:
+          "Submission not allowed. Please wait 36 hours before trying again.",
+      });
+    }
+    submission.lastSubmission = currentTime;
+    await submission.save();
+  } else {
+    const report = await Report.create({
+      age,
+      medication,
+      state,
+      city,
+      location,
+      ipAddress,
+      lastSubmission: currentTime,
+    });
+
+    if (!report) throw new ApiError(400, "Failed to create the report");
+
+    return res.status(200).json(new ApiResponse(200, report, "report added"));
+  }
 });
 
 const reportDetails = asyncHandler(async (_, res) => {
