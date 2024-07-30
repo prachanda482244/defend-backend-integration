@@ -17,6 +17,7 @@ const createReport = asyncHandler(async (req, res) => {
 const reportDetails = asyncHandler(async (req, res) => {
   const report = await Report.find();
   if (!report) throw new ApiError(400, "Report not found");
+  const totalRecords = report.length;
 
   const ageCounts = report.reduce((acc, item) => {
     acc[item.age] = (acc[item.age] || 0) + 1;
@@ -40,19 +41,26 @@ const reportDetails = asyncHandler(async (req, res) => {
   const ageArray = Object.keys(ageCounts).map((key) => ({
     age: key,
     count: ageCounts[key],
+    percentage: ((ageCounts[key] / totalRecords) * 100).toFixed(2) + " %",
+  }));
+
+  const medicationArray = Object.keys(medicationCounts).map((key) => ({
+    medication: key,
+    count: medicationCounts[key],
+    percentage:
+      ((medicationCounts[key] / totalRecords) * 100).toFixed(2) + " %",
   }));
 
   const stateArray = Object.keys(stateCounts).map((key) => ({
     state: key,
     count: stateCounts[key],
+    percentage: ((stateCounts[key] / totalRecords) * 100).toFixed(2) + " %",
   }));
-  const medicationArray = Object.keys(medicationCounts).map((key) => ({
-    medication: key,
-    count: medicationCounts[key],
-  }));
+
   const cityArray = Object.keys(cityCounts).map((key) => ({
     city: key,
     count: cityCounts[key],
+    percentage: ((cityCounts[key] / totalRecords) * 100).toFixed(2) + " %",
   }));
 
   const result = {
@@ -60,7 +68,7 @@ const reportDetails = asyncHandler(async (req, res) => {
     medicationCounts: medicationArray,
     stateCounts: stateArray,
     cityCounts: cityArray,
-    totalRecords: report.length,
+    totalRecords,
   };
 
   return res.status(200).json(new ApiResponse(200, result, "report details"));
