@@ -8,13 +8,20 @@ const createReport = asyncHandler(async (req, res) => {
   if ([medication, state, city].some((field) => field.trim() === "")) {
     throw new ApiError(400, "All field required");
   }
-  const report = await Report.create({ age, medication, state, city });
+  const location = `${state} ${city}`;
+  const report = await Report.create({
+    age,
+    medication,
+    state,
+    city,
+    location,
+  });
   if (!report) throw new ApiError(400, "Failed to create the report");
 
   return res.status(200).json(new ApiResponse(200, report, "report added"));
 });
 
-const reportDetails = asyncHandler(async (req, res) => {
+const reportDetails = asyncHandler(async (_, res) => {
   const report = await Report.find();
   if (!report) throw new ApiError(400, "Report not found");
   const totalRecords = report.length;
@@ -38,6 +45,10 @@ const reportDetails = asyncHandler(async (req, res) => {
     return acc;
   }, {});
 
+  const locationCounts = report.reduce((acc, item) => {
+    acc[item.location] = (acc[item.location] || 0) + 1;
+    return acc;
+  }, {});
   const ageArray = Object.keys(ageCounts).map((key) => ({
     age: key,
     count: ageCounts[key],
@@ -65,12 +76,20 @@ const reportDetails = asyncHandler(async (req, res) => {
     count: cityCounts[key],
     percentage: parseFloat(((cityCounts[key] / totalRecords) * 100).toFixed(2)),
   }));
+  const locationArray = Object.keys(locationCounts).map((key) => ({
+    location: key,
+    count: locationCounts[key],
+    percentage: parseFloat(
+      ((locationCounts[key] / totalRecords) * 100).toFixed(2)
+    ),
+  }));
 
   const result = {
     ageCounts: ageArray,
     medicationCounts: medicationArray,
     stateCounts: stateArray,
     cityCounts: cityArray,
+    locationCounts: locationArray,
     totalRecords,
   };
 
