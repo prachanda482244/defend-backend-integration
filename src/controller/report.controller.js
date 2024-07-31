@@ -4,41 +4,40 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 const createReport = asyncHandler(async (req, res) => {
-  const { age, medication, state, city, ipAddress } = req.body;
+  const { age, medication, state, city } = req.body;
   if ([medication, state, city].some((field) => field.trim() === "")) {
     throw new ApiError(400, "All field required");
   }
   const location = `${state} ${city}`;
   const currentTime = new Date();
 
-  let submission = await Report.findOne({ ipAddress });
+  // let submission = await Report.findOne({ ipAddress });
+  // if (submission) {
+  //   const timeDifference =
+  //     (currentTime - submission.lastSubmission) / (1000 * 60 * 60); // in hours
+  //   if (timeDifference < 36) {
+  //     return res.status(429).json({
+  //       message:
+  //         "Submission not allowed. Please wait 36 hours before trying again.",
+  //     });
+  //   }
+  //   submission.lastSubmission = currentTime;
+  //   await submission.save();
+  // } else {
+  const report = await Report.create({
+    age,
+    medication,
+    state,
+    city,
+    location,
+    ipAddress: "192.14.33",
+    lastSubmission: currentTime,
+  });
 
-  if (submission) {
-    const timeDifference =
-      (currentTime - submission.lastSubmission) / (1000 * 60 * 60); // in hours
-    if (timeDifference < 36) {
-      return res.status(429).json({
-        message:
-          "Submission not allowed. Please wait 36 hours before trying again.",
-      });
-    }
-    submission.lastSubmission = currentTime;
-    await submission.save();
-  } else {
-    const report = await Report.create({
-      age,
-      medication,
-      state,
-      city,
-      location,
-      ipAddress,
-      lastSubmission: currentTime,
-    });
+  if (!report) throw new ApiError(400, "Failed to create the report");
 
-    if (!report) throw new ApiError(400, "Failed to create the report");
-
-    return res.status(200).json(new ApiResponse(200, report, "report added"));
-  }
+  return res.status(200).json(new ApiResponse(200, report, "report added"));
+  // }
 });
 
 const reportDetails = asyncHandler(async (_, res) => {
@@ -69,6 +68,7 @@ const reportDetails = asyncHandler(async (_, res) => {
     acc[item.location] = (acc[item.location] || 0) + 1;
     return acc;
   }, {});
+
   const ageArray = Object.keys(ageCounts).map((key) => ({
     age: key,
     count: ageCounts[key],
