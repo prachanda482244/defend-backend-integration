@@ -4,8 +4,10 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 const createReport = asyncHandler(async (req, res) => {
-  const { age, medication, state, city } = req.body;
-  if ([medication, state, city].some((field) => field.trim() === "")) {
+  const { age, medication, state, city, ipAddress } = req.body;
+  if (
+    [medication, state, city, ipAddress].some((field) => field.trim() === "")
+  ) {
     throw new ApiError(400, "All field required");
   }
   const location = `${state} ${city}`;
