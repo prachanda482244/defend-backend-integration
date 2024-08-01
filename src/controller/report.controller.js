@@ -39,6 +39,7 @@ const createReport = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, report, "report added"));
   // }
 });
+
 const reportDetails = asyncHandler(async (_, res) => {
   const report = await Report.find();
   if (!report) throw new ApiError(400, "Report not found");
@@ -76,7 +77,7 @@ const reportDetails = asyncHandler(async (_, res) => {
         ((ageCounts[key] / totalRecords) * 100).toFixed(2)
       ),
     }))
-    .sort((a, b) => b.count - a.count);
+    .sort((a, b) => b.count - a.count); // Sorting in descending order
 
   const medicationArray = Object.keys(medicationCounts)
     .map((key) => ({
