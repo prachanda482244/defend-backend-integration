@@ -91,7 +91,7 @@ const reportDetails = asyncHandler(async (_, res) => {
 
   const stateArray = Object.keys(stateCounts)
     .map((key) => ({
-      ucName: key,
+      ucName: key.toUpperCase(),
       value: stateCounts[key],
       percentage: parseFloat(
         ((stateCounts[key] / totalRecords) * 100).toFixed(2)
