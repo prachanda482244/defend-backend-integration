@@ -39,7 +39,6 @@ const createReport = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, report, "report added"));
   // }
 });
-
 const reportDetails = asyncHandler(async (_, res) => {
   const report = await Report.find();
   if (!report) throw new ApiError(400, "Report not found");
@@ -69,51 +68,64 @@ const reportDetails = asyncHandler(async (_, res) => {
     return acc;
   }, {});
 
-  const ageArray = Object.keys(ageCounts).map((key) => ({
-    age: key,
-    count: ageCounts[key],
-    percentage: parseFloat(((ageCounts[key] / totalRecords) * 100).toFixed(2)),
-  }));
+  const ageArray = Object.keys(ageCounts)
+    .map((key) => ({
+      age: key,
+      count: ageCounts[key],
+      percentage: parseFloat(
+        ((ageCounts[key] / totalRecords) * 100).toFixed(2)
+      ),
+    }))
+    .sort((a, b) => b.count - a.count);
 
-  const medicationArray = Object.keys(medicationCounts).map((key) => ({
-    medication: key,
-    count: medicationCounts[key],
-    percentage: parseFloat(
-      ((medicationCounts[key] / totalRecords) * 100).toFixed(2)
-    ),
-  }));
+  const medicationArray = Object.keys(medicationCounts)
+    .map((key) => ({
+      medication: key,
+      count: medicationCounts[key],
+      percentage: parseFloat(
+        ((medicationCounts[key] / totalRecords) * 100).toFixed(2)
+      ),
+    }))
+    .sort((a, b) => b.count - a.count);
 
-  const stateArray = Object.keys(stateCounts).map((key) => ({
-    state: key,
-    count: stateCounts[key],
-    percentage: parseFloat(
-      ((stateCounts[key] / totalRecords) * 100).toFixed(2)
-    ),
-  }));
+  const stateArray = Object.keys(stateCounts)
+    .map((key) => ({
+      state: key,
+      count: stateCounts[key],
+      percentage: parseFloat(
+        ((stateCounts[key] / totalRecords) * 100).toFixed(2)
+      ),
+    }))
+    .sort((a, b) => b.count - a.count);
 
-  const cityArray = Object.keys(cityCounts).map((key) => ({
-    city: key,
-    count: cityCounts[key],
-    percentage: parseFloat(((cityCounts[key] / totalRecords) * 100).toFixed(2)),
-  }));
-  const locationArray = Object.keys(locationCounts).map((key) => ({
-    location: key,
-    count: locationCounts[key],
-    percentage: parseFloat(
-      ((locationCounts[key] / totalRecords) * 100).toFixed(2)
-    ),
-  }));
+  const cityArray = Object.keys(cityCounts)
+    .map((key) => ({
+      city: key,
+      count: cityCounts[key],
+      percentage: parseFloat(
+        ((cityCounts[key] / totalRecords) * 100).toFixed(2)
+      ),
+    }))
+    .sort((a, b) => b.count - a.count);
 
-  const result = {
-    ageCounts: ageArray,
-    medicationCounts: medicationArray,
-    stateCounts: stateArray,
-    cityCounts: cityArray,
-    locationCounts: locationArray,
+  const locationArray = Object.keys(locationCounts)
+    .map((key) => ({
+      location: key,
+      count: locationCounts[key],
+      percentage: parseFloat(
+        ((locationCounts[key] / totalRecords) * 100).toFixed(2)
+      ),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  res.json({
     totalRecords,
-  };
-
-  return res.status(200).json(new ApiResponse(200, result, "report details"));
+    ageArray,
+    medicationArray,
+    stateArray,
+    cityArray,
+    locationArray,
+  });
 });
 
 const filteredByAge = asyncHandler(async (req, res) => {
