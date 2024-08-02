@@ -64,22 +64,22 @@ const reportDetails = asyncHandler(async (_, res) => {
   if (!report) throw new ApiError(400, "Report not found");
   const totalRecords = report.length;
 
+  // Count occurrences for age, medication, state, and location
   const ageCounts = report.reduce((acc, item) => {
     acc[item.age] = (acc[item.age] || 0) + 1;
     return acc;
   }, {});
+
   const medicationCounts = report.reduce((acc, item) => {
     acc[item.medication] = (acc[item.medication] || 0) + 1;
     return acc;
   }, {});
 
   const stateCounts = report.reduce((acc, item) => {
-    acc[item.state] = (acc[item.state] || 0) + 1;
-    return acc;
-  }, {});
-
-  const cityCounts = report.reduce((acc, item) => {
-    acc[item.city] = (acc[item.city] || 0) + 1;
+    if (!acc[item.state]) acc[item.state] = { count: 0, cities: {} };
+    acc[item.state].count += 1;
+    acc[item.state].cities[item.city] =
+      (acc[item.state].cities[item.city] || 0) + 1;
     return acc;
   }, {});
 
@@ -88,6 +88,7 @@ const reportDetails = asyncHandler(async (_, res) => {
     return acc;
   }, {});
 
+  // Transform counts into sorted arrays with additional information
   const ageArray = Object.keys(ageCounts)
     .map((key) => ({
       age: key,
@@ -96,7 +97,7 @@ const reportDetails = asyncHandler(async (_, res) => {
         ((ageCounts[key] / totalRecords) * 100).toFixed(2)
       ),
     }))
-    .sort((a, b) => b.count - a.count); // Sorting in descending order
+    .sort((a, b) => b.count - a.count);
 
   const medicationArray = Object.keys(medicationCounts)
     .map((key) => ({
@@ -111,40 +112,34 @@ const reportDetails = asyncHandler(async (_, res) => {
   const stateArray = Object.keys(stateCounts)
     .map((key) => ({
       ucName: key.toUpperCase(),
-      value: stateCounts[key],
+      count: stateCounts[key].count,
+      cities: Object.keys(stateCounts[key].cities).map((city) => ({
+        city,
+        count: stateCounts[key].cities[city],
+      })),
       percentage: parseFloat(
-        ((stateCounts[key] / totalRecords) * 100).toFixed(2)
+        ((stateCounts[key].count / totalRecords) * 100).toFixed(2)
       ),
     }))
     .sort((a, b) => b.count - a.count);
 
-  const cityArray = Object.keys(cityCounts)
-    .map((key) => ({
-      city: key,
-      count: cityCounts[key],
-      percentage: parseFloat(
-        ((cityCounts[key] / totalRecords) * 100).toFixed(2)
-      ),
-    }))
-    .sort((a, b) => b.count - a.count);
+  // const locationArray = Object.keys(locationCounts)
+  //   .map((key) => ({
+  //     location: key,
+  //     count: locationCounts[key],
+  //     percentage: parseFloat(
+  //       ((locationCounts[key] / totalRecords) * 100).toFixed(2)
+  //     ),
+  //   }))
+  //   .sort((a, b) => b.count - a.count);
 
-  const locationArray = Object.keys(locationCounts)
-    .map((key) => ({
-      location: key,
-      count: locationCounts[key],
-      percentage: parseFloat(
-        ((locationCounts[key] / totalRecords) * 100).toFixed(2)
-      ),
-    }))
-    .sort((a, b) => b.count - a.count);
-
+  // Respond with the aggregated data
   res.json({
     totalRecords,
     ageArray,
     medicationArray,
     stateArray,
-    cityArray,
-    locationArray,
+    // locationArray,
   });
 });
 
