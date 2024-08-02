@@ -8,8 +8,9 @@ const createReport = asyncHandler(async (req, res) => {
   if (
     [medication, state, city, ipAddress].some((field) => field.trim() === "")
   ) {
-    throw new ApiError(400, "All field required");
+    throw new ApiError(400, "All fields are required.");
   }
+
   const location = `${state} ${city}`;
   const currentTime = new Date();
 
@@ -28,8 +29,19 @@ const createReport = asyncHandler(async (req, res) => {
           )
         );
     }
+
+    // Update the lastSubmission time and save the report
+    submission.age = age;
+    submission.medication = medication;
+    submission.state = state;
+    submission.city = city;
+    submission.location = location;
     submission.lastSubmission = currentTime;
     await submission.save();
+
+    return res
+      .status(200)
+      .json(new ApiResponse(200, submission, "Report updated."));
   } else {
     const report = await Report.create({
       age,
@@ -43,7 +55,7 @@ const createReport = asyncHandler(async (req, res) => {
 
     if (!report) throw new ApiError(400, "Failed to create the report");
 
-    return res.status(200).json(new ApiResponse(200, report, "report added"));
+    return res.status(200).json(new ApiResponse(200, report, "Report added."));
   }
 });
 
