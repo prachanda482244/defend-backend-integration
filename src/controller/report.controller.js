@@ -107,7 +107,7 @@ const reportDetails = asyncHandler(async (_, res) => {
   const stateArray = Object.keys(stateCounts)
     .map((key) => ({
       ucName: key.toUpperCase(),
-      count: stateCounts[key].count,
+      value: stateCounts[key].count,
       cities: Object.keys(stateCounts[key].cities).map((city) => ({
         city,
         count: stateCounts[key].cities[city],
