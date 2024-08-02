@@ -18,10 +18,15 @@ const createReport = asyncHandler(async (req, res) => {
     const timeDifference =
       (currentTime - submission.lastSubmission) / (1000 * 60 * 60); // in hours
     if (timeDifference < 36) {
-      throw new ApiError(
-        429,
-        "Submission not allowed ! Please try again after 36 hours"
-      );
+      return res
+        .status(429)
+        .json(
+          new ApiResponse(
+            429,
+            [],
+            "Submission not allowed. Please wait 36 hours before trying again."
+          )
+        );
     }
     submission.lastSubmission = currentTime;
     await submission.save();
