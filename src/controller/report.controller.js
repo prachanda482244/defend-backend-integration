@@ -83,11 +83,6 @@ const reportDetails = asyncHandler(async (_, res) => {
     return acc;
   }, {});
 
-  const locationCounts = report.reduce((acc, item) => {
-    acc[item.location] = (acc[item.location] || 0) + 1;
-    return acc;
-  }, {});
-
   // Transform counts into sorted arrays with additional information
   const ageArray = Object.keys(ageCounts)
     .map((key) => ({
@@ -123,23 +118,12 @@ const reportDetails = asyncHandler(async (_, res) => {
     }))
     .sort((a, b) => b.count - a.count);
 
-  // const locationArray = Object.keys(locationCounts)
-  //   .map((key) => ({
-  //     location: key,
-  //     count: locationCounts[key],
-  //     percentage: parseFloat(
-  //       ((locationCounts[key] / totalRecords) * 100).toFixed(2)
-  //     ),
-  //   }))
-  //   .sort((a, b) => b.count - a.count);
-
   // Respond with the aggregated data
   res.json({
     totalRecords,
     ageArray,
     medicationArray,
     stateArray,
-    // locationArray,
   });
 });
 
