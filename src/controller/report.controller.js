@@ -17,7 +17,7 @@ const createReport = asyncHandler(async (req, res) => {
   let submission = await Report.findOne({ ipAddress });
   if (submission) {
     const timeDifference =
-      (currentTime - submission.lastSubmission) / (1000 * 60 * 60); // in hours
+      (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
     if (timeDifference < 36) {
       return res
         .status(429)
