@@ -4,59 +4,58 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 const createReport = asyncHandler(async (req, res) => {
-  const { age, medication, state, city, ipAddress } = req.body;
-  if (
-    [medication, state, city, ipAddress].some((field) => field.trim() === "")
-  ) {
+  const { age, medication, state, city } = req.body;
+  ipAddress;
+  if ([medication, state, city].some((field) => field.trim() === "")) {
     throw new ApiError(400, "All fields are required.");
   }
 
   const location = `${state} ${city}`;
   const currentTime = new Date();
 
-  let submission = await Report.findOne({ ipAddress });
-  if (submission) {
-    const timeDifference =
-      (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
-    if (timeDifference < 36) {
-      return res
-        .status(429)
-        .json(
-          new ApiResponse(
-            429,
-            [],
-            "Submission not allowed. Please wait 36 hours before trying again."
-          )
-        );
-    }
+  // let submission = await Report.findOne({ ipAddress });
+  // if (submission) {
+  // const timeDifference =
+  // (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
+  // if (timeDifference < 36) {
+  // return res
+  //   .status(429)
+  //   .json(
+  //     new ApiResponse(
+  //       429,
+  //       [],
+  //       "Submission not allowed. Please wait 36 hours before trying again."
+  //     )
+  //   );
+  // }
 
-    // Update the lastSubmission time and save the report
-    submission.age = age;
-    submission.medication = medication;
-    submission.state = state;
-    submission.city = city;
-    submission.location = location;
-    submission.lastSubmission = currentTime;
-    await submission.save();
+  // Update the lastSubmission time and save the report
+  // submission.age = age;
+  // submission.medication = medication;
+  // submission.state = state;
+  // submission.city = city;
+  // submission.location = location;
+  // submission.lastSubmission = currentTime;
+  // await submission.save();
 
-    return res
-      .status(200)
-      .json(new ApiResponse(200, submission, "Report updated."));
-  } else {
-    const report = await Report.create({
-      age,
-      medication,
-      state,
-      city,
-      location,
-      ipAddress,
-      lastSubmission: currentTime,
-    });
+  // return res
+  // .status(200)
+  // .json(new ApiResponse(200, submission, "Report updated."));
+  // } else {
+  const report = await Report.create({
+    age,
+    medication,
+    state,
+    city,
+    location,
+    ipAddress: "192.3.4",
+    lastSubmission: currentTime,
+  });
 
-    if (!report) throw new ApiError(400, "Failed to create the report");
+  if (!report) throw new ApiError(400, "Failed to create the report");
 
-    return res.status(200).json(new ApiResponse(200, report, "Report added."));
-  }
+  return res.status(200).json(new ApiResponse(200, report, "Report added."));
+  // }
 });
 
 const reportDetails = asyncHandler(async (_, res) => {
