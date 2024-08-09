@@ -62,143 +62,100 @@ const reportDetails = asyncHandler(async (_, res) => {
   if (!report) throw new ApiError(400, "Report not found");
   const totalRecords = report.length;
 
-  // Count occurrences for age, medication, state, and location
-  const ageCounts = report.reduce((acc, item) => {
-    acc[item.age] = (acc[item.age] || 0) + 1;
-    return acc;
-  }, {});
+  // Initialize aggregation containers
+  const medicationDetails = {};
 
-  const medicationCounts = report.reduce((acc, item) => {
-    acc[item.medication] = (acc[item.medication] || 0) + 1;
-    return acc;
-  }, {});
+  // Aggregate data
+  report.forEach((item) => {
+    if (!medicationDetails[item.medication]) {
+      medicationDetails[item.medication] = { totalCount: 0, ageGroups: {} };
+    }
+    medicationDetails[item.medication].totalCount += 1;
 
-  const stateCounts = report.reduce((acc, item) => {
-    if (!acc[item.state]) acc[item.state] = { count: 0, cities: {} };
-    acc[item.state].count += 1;
-    acc[item.state].cities[item.city] =
-      (acc[item.state].cities[item.city] || 0) + 1;
-    return acc;
-  }, {});
-
-  // Transform counts into sorted arrays with additional information
-  const ageArray = Object.keys(ageCounts)
-    .map((key) => ({
-      age: key,
-      count: ageCounts[key],
-      percentage: parseFloat(
-        ((ageCounts[key] / totalRecords) * 100).toFixed(2)
-      ),
-    }))
-    .sort((a, b) => b.count - a.count);
-
-  const medicationArray = Object.keys(medicationCounts)
-    .map((key) => ({
-      medication: key,
-      count: medicationCounts[key],
-      percentage: parseFloat(
-        ((medicationCounts[key] / totalRecords) * 100).toFixed(2)
-      ),
-    }))
-    .sort((a, b) => b.count - a.count);
-
-  const stateArray = Object.keys(stateCounts)
-    .map((key) => ({
-      ucName: key.toUpperCase(),
-      value: stateCounts[key].count,
-      cities: Object.keys(stateCounts[key].cities).map((city) => ({
-        city,
-        count: stateCounts[key].cities[city],
-      })),
-      percentage: parseFloat(
-        ((stateCounts[key].count / totalRecords) * 100).toFixed(2)
-      ),
-    }))
-    .sort((a, b) => b.count - a.count);
-
-  // Respond with the aggregated data
-  res.json({
-    totalRecords,
-    ageArray,
-    medicationArray,
-    stateArray,
+    if (!medicationDetails[item.medication].ageGroups[item.age]) {
+      medicationDetails[item.medication].ageGroups[item.age] = {
+        count: 0,
+        states: {},
+      };
+    }
+    medicationDetails[item.medication].ageGroups[item.age].count += 1;
+    medicationDetails[item.medication].ageGroups[item.age].states[item.state] =
+      (medicationDetails[item.medication].ageGroups[item.age].states[
+        item.state
+      ] || 0) + 1;
   });
-});
 
-const filteredByAge = asyncHandler(async (req, res) => {
-  const totalDocsCount = await Report.countDocuments();
-  const { age } = req.query;
+  const barAndChartData = Object.keys(medicationDetails).map((medication) => {
+    const totalCount = medicationDetails[medication].totalCount;
+    return {
+      medication,
+      totalCount,
+      percentage: parseFloat(((totalCount / totalRecords) * 100).toFixed(2)),
+      ageGroups: Object.keys(medicationDetails[medication].ageGroups).map(
+        (age) => {
+          const ageGroup = medicationDetails[medication].ageGroups[age];
+          return {
+            age,
+            count: ageGroup.count,
+            states: Object.keys(ageGroup.states).map((state) => ({
+              state,
+              count: ageGroup.states[state],
+            })),
+          };
+        }
+      ),
+    };
+  });
 
-  const report = await Report.find({ age: age });
+  const stateDetails = {};
 
-  const object = report.map((data) => ({
-    medication: data.medication,
-    age: data.age,
-    state: data.state,
-    city: data.city,
-  }));
+  // Aggregate data
+  report.forEach((item) => {
+    if (!stateDetails[item.state]) {
+      stateDetails[item.state] = {};
+    }
+    if (!stateDetails[item.state][item.age]) {
+      stateDetails[item.state][item.age] = {
+        count: 0,
+        medications: {},
+      };
+    }
+    stateDetails[item.state][item.age].count += 1;
+    stateDetails[item.state][item.age].medications[item.medication] =
+      (stateDetails[item.state][item.age].medications[item.medication] || 0) +
+      1;
+  });
 
-  const response = {
-    ageGroupDetails: object,
-    totalCount: report.length,
-    percentage: `${Math.floor((report.length / totalDocsCount) * 100)} %`,
-  };
-  return res
+  const locationData = Object.keys(stateDetails).map((state) => {
+    return {
+      state,
+      ageGroups: Object.keys(stateDetails[state]).map((age) => {
+        const ageGroup = stateDetails[state][age];
+        return {
+          age,
+          count: ageGroup.count,
+          medications: Object.keys(ageGroup.medications).map((medication) => ({
+            medication,
+            count: ageGroup.medications[medication],
+            percentage: parseFloat(
+              ((ageGroup.medications[medication] / totalRecords) * 100).toFixed(
+                2
+              )
+            ),
+          })),
+        };
+      }),
+    };
+  });
+  res
     .status(200)
-    .json(new ApiResponse(200, response, "Records fetched"));
+    .json(
+      new ApiResponse(
+        200,
+        { totalRecords, barAndChartData, locationData },
+        "data"
+      )
+    );
 });
 
-const filteredByMedication = asyncHandler(async (req, res) => {
-  const totalDocsCount = await Report.countDocuments();
-
-  const { medication } = req.query;
-
-  const report = await Report.find({ medication });
-
-  const object = report.map((data) => ({
-    medication: data.medication,
-    age: data.age,
-    state: data.state,
-    city: data.city,
-  }));
-
-  const response = {
-    medicationGroupDetails: object,
-    totalCount: report.length,
-    percentage: `${Math.floor((report.length / totalDocsCount) * 100)} %`,
-  };
-  return res
-    .status(200)
-    .json(new ApiResponse(200, response, "Records fetched"));
-});
-const filteredByState = asyncHandler(async (req, res) => {
-  const totalDocsCount = await Report.countDocuments();
-
-  const { state, city } = req.query;
-
-  const report = await Report.find({ $or: [{ state }, { city }] });
-
-  const object = report.map((data) => ({
-    medication: data.medication,
-    age: data.age,
-    state: data.state,
-    city: data.city,
-  }));
-
-  const response = {
-    medicationGroupDetails: object,
-    totalCount: report.length,
-    percentage: `${Math.floor((report.length / totalDocsCount) * 100)} %`,
-  };
-  return res
-    .status(200)
-    .json(new ApiResponse(200, response, "Records fetched"));
-});
-
-export {
-  createReport,
-  reportDetails,
-  filteredByAge,
-  filteredByMedication,
-  filteredByState,
-};
+export { createReport, reportDetails };

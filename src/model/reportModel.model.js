@@ -2,7 +2,7 @@ import { Schema, model } from "mongoose";
 const reportSchema = new Schema(
   {
     age: {
-      type: Number,
+      type: String,
       required: true,
     },
     medication: {
