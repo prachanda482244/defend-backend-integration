@@ -64,9 +64,11 @@ const reportDetails = asyncHandler(async (_, res) => {
 
   // Initialize aggregation containers
   const medicationDetails = {};
+  const stateDetails = {};
 
   // Aggregate data
   report.forEach((item) => {
+    // Medication details
     if (!medicationDetails[item.medication]) {
       medicationDetails[item.medication] = { totalCount: 0, ageGroups: {} };
     }
@@ -83,8 +85,24 @@ const reportDetails = asyncHandler(async (_, res) => {
       (medicationDetails[item.medication].ageGroups[item.age].states[
         item.state
       ] || 0) + 1;
+
+    // State details
+    if (!stateDetails[item.state]) {
+      stateDetails[item.state] = {};
+    }
+    if (!stateDetails[item.state][item.age]) {
+      stateDetails[item.state][item.age] = {
+        count: 0,
+        medications: {},
+      };
+    }
+    stateDetails[item.state][item.age].count += 1;
+    stateDetails[item.state][item.age].medications[item.medication] =
+      (stateDetails[item.state][item.age].medications[item.medication] || 0) +
+      1;
   });
 
+  // Transform medication details into desired format
   const barAndChartData = Object.keys(medicationDetails).map((medication) => {
     const totalCount = medicationDetails[medication].totalCount;
     return {
@@ -107,46 +125,34 @@ const reportDetails = asyncHandler(async (_, res) => {
     };
   });
 
-  const stateDetails = {};
-
-  // Aggregate data
-  report.forEach((item) => {
-    if (!stateDetails[item.state]) {
-      stateDetails[item.state] = {};
-    }
-    if (!stateDetails[item.state][item.age]) {
-      stateDetails[item.state][item.age] = {
-        count: 0,
-        medications: {},
-      };
-    }
-    stateDetails[item.state][item.age].count += 1;
-    stateDetails[item.state][item.age].medications[item.medication] =
-      (stateDetails[item.state][item.age].medications[item.medication] || 0) +
-      1;
-  });
-
+  // Transform state details into desired format
   const locationData = Object.keys(stateDetails).map((state) => {
+    const ageGroups = Object.keys(stateDetails[state]).map((age) => {
+      const ageGroup = stateDetails[state][age];
+      return {
+        age,
+        count: ageGroup.count,
+        medications: Object.keys(ageGroup.medications).map((medication) => ({
+          medication,
+          count: ageGroup.medications[medication],
+          percentage: parseFloat(
+            ((ageGroup.medications[medication] / totalRecords) * 100).toFixed(2)
+          ),
+        })),
+      };
+    });
+
     return {
-      state,
-      ageGroups: Object.keys(stateDetails[state]).map((age) => {
-        const ageGroup = stateDetails[state][age];
-        return {
-          age,
-          count: ageGroup.count,
-          medications: Object.keys(ageGroup.medications).map((medication) => ({
-            medication,
-            count: ageGroup.medications[medication],
-            percentage: parseFloat(
-              ((ageGroup.medications[medication] / totalRecords) * 100).toFixed(
-                2
-              )
-            ),
-          })),
-        };
-      }),
+      ucName: state.toUpperCase(),
+      value: Object.keys(stateDetails[state]).reduce(
+        (acc, age) => acc + stateDetails[state][age].count,
+        0
+      ),
+      ageGroups,
     };
   });
+
+  // Send the response
   res
     .status(200)
     .json(
