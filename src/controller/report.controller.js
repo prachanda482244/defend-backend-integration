@@ -199,12 +199,30 @@ const reportDetails = asyncHandler(async (_, res) => {
     };
   });
 
+  const tableData = report.map((report) => ({
+    city: report.city,
+    state: report.state,
+    ageGroup: report.age,
+    drug: report.medication,
+    date: new Date(report.createdAt),
+  }));
+
+  const sortedTableData = tableData.sort((a, b) => b.date - a.date);
+
+  const formattedTableData = sortedTableData.map((data) => ({
+    city: data.city,
+    state: data.state,
+    ageGroup: data.ageGroup,
+    drug: data.drug,
+    date: data.date.toLocaleDateString("en-US"),
+  }));
+
   res
     .status(200)
     .json(
       new ApiResponse(
         200,
-        { totalRecords, barAndChartData, locationData },
+        { totalRecords, barAndChartData, locationData, formattedTableData },
         "data"
       )
     );
