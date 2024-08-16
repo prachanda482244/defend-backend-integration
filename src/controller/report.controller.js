@@ -68,41 +68,85 @@ const reportDetails = asyncHandler(async (_, res) => {
 
   // Aggregate data
   report.forEach((item) => {
-    // Medication details
-    if (!medicationDetails[item.medication]) {
-      medicationDetails[item.medication] = { totalCount: 0, ageGroups: {} };
-    }
-    medicationDetails[item.medication].totalCount += 1;
+    const { medication, age, state, city, createdAt } = item;
 
-    if (!medicationDetails[item.medication].ageGroups[item.age]) {
-      medicationDetails[item.medication].ageGroups[item.age] = {
+    // Medication details
+    if (!medicationDetails[medication]) {
+      medicationDetails[medication] = { totalCount: 0, ageGroups: {} };
+    }
+    medicationDetails[medication].totalCount += 1;
+
+    if (!medicationDetails[medication].ageGroups[age]) {
+      medicationDetails[medication].ageGroups[age] = {
         count: 0,
         states: {},
+        createdAt, // Store the createdAt date here
       };
     }
-    medicationDetails[item.medication].ageGroups[item.age].count += 1;
-    medicationDetails[item.medication].ageGroups[item.age].states[item.state] =
-      (medicationDetails[item.medication].ageGroups[item.age].states[
-        item.state
-      ] || 0) + 1;
+    medicationDetails[medication].ageGroups[age].count += 1;
+
+    if (!medicationDetails[medication].ageGroups[age].states[state]) {
+      medicationDetails[medication].ageGroups[age].states[state] = {
+        count: 0,
+        cities: [],
+      };
+    }
+    medicationDetails[medication].ageGroups[age].states[state].count += 1;
+
+    // Check if the city already exists in the cities array
+    const existingCityIndex = medicationDetails[medication].ageGroups[
+      age
+    ].states[state].cities.findIndex((c) => c.name === city);
+
+    if (existingCityIndex !== -1) {
+      // If city exists, increment the count
+      medicationDetails[medication].ageGroups[age].states[state].cities[
+        existingCityIndex
+      ].count += 1;
+    } else {
+      // If city doesn't exist, add it with count = 1
+      medicationDetails[medication].ageGroups[age].states[state].cities.push({
+        name: city,
+        count: 1,
+      });
+    }
 
     // State details
-    if (!stateDetails[item.state]) {
-      stateDetails[item.state] = {};
+    if (!stateDetails[state]) {
+      stateDetails[state] = {};
     }
-    if (!stateDetails[item.state][item.age]) {
-      stateDetails[item.state][item.age] = {
+    if (!stateDetails[state][age]) {
+      stateDetails[state][age] = {
         count: 0,
         medications: {},
+        cities: [],
+        createdAt, // Store the createdAt date here
       };
     }
-    stateDetails[item.state][item.age].count += 1;
-    stateDetails[item.state][item.age].medications[item.medication] =
-      (stateDetails[item.state][item.age].medications[item.medication] || 0) +
-      1;
+    stateDetails[state][age].count += 1;
+
+    if (!stateDetails[state][age].medications[medication]) {
+      stateDetails[state][age].medications[medication] = 0;
+    }
+    stateDetails[state][age].medications[medication] += 1;
+
+    // Check if the city already exists in the cities array
+    const existingCityIndexState = stateDetails[state][age].cities.findIndex(
+      (c) => c.city === city
+    );
+
+    if (existingCityIndexState !== -1) {
+      // If city exists, increment the count
+      stateDetails[state][age].cities[existingCityIndexState].count += 1;
+    } else {
+      // If city doesn't exist, add it with count = 1
+      stateDetails[state][age].cities.push({
+        city,
+        count: 1,
+      });
+    }
   });
 
-  // Transform medication details into desired format
   const barAndChartData = Object.keys(medicationDetails).map((medication) => {
     const totalCount = medicationDetails[medication].totalCount;
     return {
@@ -117,15 +161,16 @@ const reportDetails = asyncHandler(async (_, res) => {
             count: ageGroup.count,
             states: Object.keys(ageGroup.states).map((state) => ({
               state,
-              count: ageGroup.states[state],
+              count: ageGroup.states[state].count,
+              cities: ageGroup.states[state].cities,
             })),
+            createdAt: ageGroup.createdAt,
           };
         }
       ),
     };
   });
 
-  // Transform state details into desired format
   const locationData = Object.keys(stateDetails).map((state) => {
     const ageGroups = Object.keys(stateDetails[state]).map((age) => {
       const ageGroup = stateDetails[state][age];
@@ -139,6 +184,8 @@ const reportDetails = asyncHandler(async (_, res) => {
             ((ageGroup.medications[medication] / totalRecords) * 100).toFixed(2)
           ),
         })),
+        cities: ageGroup.cities,
+        createdAt: ageGroup.createdAt,
       };
     });
 
@@ -152,7 +199,6 @@ const reportDetails = asyncHandler(async (_, res) => {
     };
   });
 
-  // Send the response
   res
     .status(200)
     .json(
