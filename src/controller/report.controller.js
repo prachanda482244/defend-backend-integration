@@ -164,7 +164,7 @@ const reportDetails = asyncHandler(async (_, res) => {
               count: ageGroup.states[state].count,
               cities: ageGroup.states[state].cities,
             })),
-            createdAt: ageGroup.createdAt,
+            createdAt: new Date(ageGroup.createdAt).toLocaleDateString("en-US"),
           };
         }
       ),
