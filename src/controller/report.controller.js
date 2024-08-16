@@ -210,8 +210,7 @@ const reportDetails = asyncHandler(async (_, res) => {
   const sortedTableData = tableData.sort((a, b) => b.date - a.date);
 
   const formattedTableData = sortedTableData.map((data) => ({
-    cityState: `${data.state} , ${data.city}`,
-    state: data.state,
+    cityState: `${data.city} , ${data.state}`,
     ageGroup: data.ageGroup,
     drug: data.drug,
     date: data.date.toLocaleDateString("en-US"),
