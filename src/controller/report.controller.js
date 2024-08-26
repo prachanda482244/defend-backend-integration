@@ -120,7 +120,7 @@ const reportDetails = asyncHandler(async (_, res) => {
         count: 0,
         medications: {},
         cities: [],
-        createdAt, // Store the createdAt date here
+        createdAt,
       };
     }
     stateDetails[state][age].count += 1;
