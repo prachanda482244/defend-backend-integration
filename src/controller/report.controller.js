@@ -170,21 +170,31 @@ const reportDetails = asyncHandler(async (_, res) => {
       ),
     };
   });
-
   const locationData = Object.keys(stateDetails).map((state) => {
     const ageGroups = Object.keys(stateDetails[state]).map((age) => {
       const ageGroup = stateDetails[state][age];
       return {
         age,
         count: ageGroup.count,
-        medications: Object.keys(ageGroup.medications).map((medication) => ({
-          medication,
-          count: ageGroup.medications[medication],
-          percentage: parseFloat(
-            ((ageGroup.medications[medication] / totalRecords) * 100).toFixed(2)
-          ),
-        })),
-        cities: ageGroup.cities,
+        medications: Object.keys(ageGroup.medications).map((medication) => {
+          const citiesForMedication = ageGroup.cities.filter((cityDetail) =>
+            ageGroup.medications.hasOwnProperty(medication)
+          );
+
+          return {
+            medication,
+            count: ageGroup.medications[medication],
+            percentage: parseFloat(
+              ((ageGroup.medications[medication] / totalRecords) * 100).toFixed(
+                2
+              )
+            ),
+            cities: citiesForMedication.map((cityDetail) => ({
+              city: cityDetail.city,
+              count: cityDetail.count,
+            })),
+          };
+        }),
         createdAt: new Date(ageGroup.createdAt).toLocaleDateString("en-US"),
       };
     });
