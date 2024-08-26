@@ -170,13 +170,12 @@ const reportDetails = asyncHandler(async (_, res) => {
       ),
     };
   });
+
   const locationData = Object.keys(stateDetails).map((state) => {
     const ageGroups = Object.keys(stateDetails[state]).map((age) => {
       const ageGroup = stateDetails[state][age];
-      return {
-        age,
-        count: ageGroup.count,
-        medications: Object.keys(ageGroup.medications).map((medication) => {
+      const medicationDetails = Object.keys(ageGroup.medications).map(
+        (medication) => {
           const citiesForMedication = ageGroup.cities.filter((cityDetail) =>
             ageGroup.medications.hasOwnProperty(medication)
           );
@@ -194,17 +193,31 @@ const reportDetails = asyncHandler(async (_, res) => {
               count: cityDetail.count,
             })),
           };
-        }),
+        }
+      );
+
+      // Calculate the total count for tooltip lines
+      const tooltipLinesCount = medicationDetails.flatMap((med) =>
+        med.cities.map(() => 1)
+      ).length;
+
+      return {
+        age,
+        count: tooltipLinesCount,
+        medications: medicationDetails,
         createdAt: new Date(ageGroup.createdAt).toLocaleDateString("en-US"),
       };
     });
 
+    // Calculate the total count for this state
+    const totalStateCount = ageGroups.reduce(
+      (sum, ageGroup) => sum + ageGroup.count,
+      0
+    );
+
     return {
       ucName: state.toUpperCase(),
-      value: Object.keys(stateDetails[state]).reduce(
-        (acc, age) => acc + stateDetails[state][age].count,
-        0
-      ),
+      value: totalStateCount,
       ageGroups,
     };
   });
