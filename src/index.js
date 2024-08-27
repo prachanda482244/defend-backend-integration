@@ -4,6 +4,7 @@ import connectToDb from "./db/connectToDb.js";
 import cors from "cors";
 import { PORT } from "./config/constants.js";
 import reportRouter from "./routes/reportRouter.route.js";
+import chartRouter from "./routes/chart.route.js";
 const app = express();
 connectToDb();
 
@@ -14,6 +15,7 @@ app.use(urlencoded({ extended: true, limit: "20mb" }));
 app.use(express.static("public"));
 
 app.use("/api/v1/report", reportRouter);
+app.use("/api/v1/chart", chartRouter);
 
 app.get("/testing", (req, res) => {
   res.status(200).json({

@@ -1,3 +1,4 @@
+import { Chart } from "../model/ChartModel.js";
 import { Report } from "../model/reportModel.model.js";
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -239,15 +240,129 @@ const reportDetails = asyncHandler(async (_, res) => {
     date: data.date.toLocaleDateString("en-US"),
   }));
 
-  res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { totalRecords, barAndChartData, locationData, formattedTableData },
-        "data"
-      )
-    );
+  const reportData = await Report.find({}, "city");
+  const uniqueCities = [...new Set(reportData.map((report) => report.city))];
+
+  const response = await Promise.all(
+    uniqueCities.map(async (city) => {
+      const cityResponse = await Report.find({ city });
+      const cityGeoLocation = await Chart.findOne({ name: city });
+
+      if (cityGeoLocation) {
+        const obj = {
+          name: cityGeoLocation.name,
+          lat: cityGeoLocation.lat,
+          lon: cityGeoLocation.lon,
+          data: cityResponse.map((report) => ({
+            ageGroups: [
+              {
+                age: report.age || "Unknown",
+                medications: [
+                  {
+                    medication: report.medication || "Unknown",
+                    count: 1,
+                  },
+                ],
+              },
+            ],
+          })),
+        };
+
+        return obj;
+      }
+
+      return null;
+    })
+  );
+
+  const filteredResponse = response.filter((city) => city !== null);
+
+  res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        totalRecords,
+        barAndChartData,
+        locationData,
+        formattedTableData,
+        filteredResponse,
+      },
+      "data"
+    )
+  );
 });
 
-export { createReport, reportDetails };
+const locationData = asyncHandler(async (req, res) => {});
+export { createReport, reportDetails, locationData };
+
+const response = [
+  {
+    name: "New York",
+    lat: 39.435435,
+    lon: -65.4545,
+    data: [
+      {
+        ageGroups: [
+          {
+            age: "26-34",
+            medications: [
+              {
+                medication: "Cocaine",
+                count: 2,
+              },
+              {
+                medication: "GHB",
+                count: 5,
+              },
+            ],
+          },
+          {
+            age: "18-25",
+            medications: [
+              {
+                medication: "GHB",
+                count: 2,
+              },
+              { medication: "Cocaine", count: 3 },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+
+  {
+    name: "San Francisco",
+    lat: 39.435435,
+    lon: -65.4545,
+    data: [
+      {
+        ageGroups: [
+          {
+            age: "26-34",
+            medications: [
+              {
+                medication: "Cocaine",
+                count: 2,
+              },
+              {
+                medication: "GHB",
+                count: 5,
+              },
+            ],
+          },
+          {
+            age: "18-25",
+            medications: [
+              {
+                medication: "GHB",
+                count: 2,
+              },
+              { medication: "Cocaine", count: 5 },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+];
