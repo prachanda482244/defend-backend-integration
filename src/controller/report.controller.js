@@ -242,12 +242,10 @@ const reportDetails = asyncHandler(async (_, res) => {
 
   const reportData = await Report.find({}, "city");
   const uniqueCities = [...new Set(reportData.map((report) => report.city))];
-
   const response = await Promise.all(
     uniqueCities.map(async (city) => {
       const cityResponse = await Report.find({ city });
       const cityGeoLocation = await Chart.findOne({ name: city });
-
       if (cityGeoLocation) {
         const obj = {
           name: cityGeoLocation.name,
@@ -263,6 +261,9 @@ const reportDetails = asyncHandler(async (_, res) => {
                     count: 1,
                   },
                 ],
+                createdAt: new Date(report.createdAt).toLocaleDateString(
+                  "en-US"
+                ),
               },
             ],
           })),
