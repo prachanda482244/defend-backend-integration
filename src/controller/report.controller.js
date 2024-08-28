@@ -246,24 +246,30 @@ const reportDetails = asyncHandler(async (_, res) => {
     uniqueCities.map(async (city) => {
       const cityResponse = await Report.find({ city });
       const cityGeoLocation = await Chart.findOne({ name: city });
+
       if (cityGeoLocation) {
+        // Fetch the state name from the Report model based on the city
+        const stateName =
+          cityResponse.length > 0 ? cityResponse[0].state : "Unknown";
+
         const obj = {
-          name: cityGeoLocation.name,
-          lat: cityGeoLocation.lat,
-          lon: cityGeoLocation.lon,
+          name: cityGeoLocation.name, // City name
+          state: stateName, // State name fetched from the Report model
+          lat: cityGeoLocation.lat, // Latitude
+          lon: cityGeoLocation.lon, // Longitude
           data: cityResponse.map((report) => ({
             ageGroups: [
               {
-                age: report.age || "Unknown",
+                age: report.age || "Unknown", // Age group
                 medications: [
                   {
-                    medication: report.medication || "Unknown",
-                    count: 1,
+                    medication: report.medication || "Unknown", // Medication name
+                    count: 1, // Count of medication occurrences
                   },
                 ],
                 createdAt: new Date(report.createdAt).toLocaleDateString(
                   "en-US"
-                ),
+                ), // Date of report
               },
             ],
           })),
@@ -275,6 +281,8 @@ const reportDetails = asyncHandler(async (_, res) => {
       return null;
     })
   );
+
+  // Filter out any null responses in case some cities don't have geolocation data
 
   const filteredResponse = response.filter((city) => city !== null);
 
