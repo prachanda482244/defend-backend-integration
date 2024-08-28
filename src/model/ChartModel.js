@@ -4,6 +4,9 @@ const chartSchema = new Schema(
     name: {
       type: String,
     },
+    state: {
+      type: String,
+    },
     lat: {
       type: Number,
       required: true,
