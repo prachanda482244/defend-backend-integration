@@ -248,9 +248,6 @@ const reportDetails = asyncHandler(async (_, res) => {
 
       const cityGeoLocation = await Chart.findOne({ name: city });
 
-      console.log(cityResponse, "CITY RESPONSE");
-      console.log(cityGeoLocation, "GEO LOCATION RESPONSE");
-
       if (cityGeoLocation) {
         const stateName =
           cityResponse.length > 0 ? cityResponse[0].state : "Unknown";
