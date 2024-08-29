@@ -245,37 +245,46 @@ const reportDetails = asyncHandler(async (_, res) => {
   const response = await Promise.all(
     uniqueCities.map(async (city) => {
       const cityResponse = await Report.find({ city });
+
       const cityGeoLocation = await Chart.findOne({ name: city });
 
+      console.log(cityResponse, "CITY RESPONSE");
+      console.log(cityGeoLocation, "GEO LOCATION RESPONSE");
+
       if (cityGeoLocation) {
-        // Fetch the state name from the Report model based on the city
         const stateName =
           cityResponse.length > 0 ? cityResponse[0].state : "Unknown";
 
-        const obj = {
-          name: cityGeoLocation.name, // City name
-          state: stateName, // State name fetched from the Report model
-          lat: cityGeoLocation.lat, // Latitude
-          lon: cityGeoLocation.lon, // Longitude
-          data: cityResponse.map((report) => ({
-            ageGroups: [
-              {
-                age: report.age || "Unknown", // Age group
-                medications: [
-                  {
-                    medication: report.medication || "Unknown", // Medication name
-                    count: 1, // Count of medication occurrences
-                  },
-                ],
-                createdAt: new Date(report.createdAt).toLocaleDateString(
-                  "en-US"
-                ), // Date of report
-              },
-            ],
-          })),
-        };
+        // Verify that both the state and city match
+        if (
+          stateName.toLowerCase() === cityGeoLocation.state.toLowerCase() &&
+          city.toLowerCase() === cityGeoLocation.name.toLowerCase()
+        ) {
+          const obj = {
+            name: cityGeoLocation.name,
+            state: stateName,
+            lat: cityGeoLocation.lat,
+            lon: cityGeoLocation.lon,
+            data: cityResponse.map((report) => ({
+              ageGroups: [
+                {
+                  age: report.age || "Unknown",
+                  medications: [
+                    {
+                      medication: report.medication || "Unknown",
+                      count: 1,
+                    },
+                  ],
+                  createdAt: new Date(report.createdAt).toLocaleDateString(
+                    "en-US"
+                  ),
+                },
+              ],
+            })),
+          };
 
-        return obj;
+          return obj;
+        }
       }
 
       return null;
