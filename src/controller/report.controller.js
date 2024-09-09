@@ -150,12 +150,14 @@ const reportDetails = asyncHandler(async (_, res) => {
 
   const barAndChartData = Object.keys(medicationDetails).map((medication) => {
     const totalCount = medicationDetails[medication].totalCount;
+
+    // Create an array for medication details
     return {
       medication,
       totalCount,
       percentage: parseFloat(((totalCount / totalRecords) * 100).toFixed(2)),
-      ageGroups: Object.keys(medicationDetails[medication].ageGroups).map(
-        (age) => {
+      ageGroups: Object.keys(medicationDetails[medication].ageGroups)
+        .map((age) => {
           const ageGroup = medicationDetails[medication].ageGroups[age];
           return {
             age,
@@ -166,9 +168,10 @@ const reportDetails = asyncHandler(async (_, res) => {
               cities: ageGroup.states[state].cities,
             })),
             createdAt: new Date(ageGroup.createdAt).toLocaleDateString("en-US"),
+            rawCreatedAt: new Date(ageGroup.createdAt),
           };
-        }
-      ),
+        })
+        .sort((a, b) => b.rawCreatedAt - a.rawCreatedAt),
     };
   });
 
