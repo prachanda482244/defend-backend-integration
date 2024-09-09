@@ -257,12 +257,20 @@ const reportDetails = asyncHandler(async (_, res) => {
           stateName.toLowerCase() === cityGeoLocation.state.toLowerCase() &&
           city.toLowerCase() === cityGeoLocation.name.toLowerCase()
         ) {
+          // Flatten the data array for sorting
+          const flattenedData = cityResponse.map((report) => ({
+            ...report,
+            createdAt: new Date(report.createdAt),
+          }));
+
+          flattenedData.sort((a, b) => b.createdAt - a.createdAt);
+
           const obj = {
             name: cityGeoLocation.name,
             state: stateName,
             lat: cityGeoLocation.lat,
             lon: cityGeoLocation.lon,
-            data: cityResponse.map((report) => ({
+            data: flattenedData.map((report) => ({
               ageGroups: [
                 {
                   age: report.age || "Unknown",
@@ -272,9 +280,7 @@ const reportDetails = asyncHandler(async (_, res) => {
                       count: 1,
                     },
                   ],
-                  createdAt: new Date(report.createdAt).toLocaleDateString(
-                    "en-US"
-                  ),
+                  createdAt: report.createdAt.toLocaleDateString("en-US"),
                 },
               ],
             })),
@@ -289,7 +295,6 @@ const reportDetails = asyncHandler(async (_, res) => {
   );
 
   // Filter out any null responses in case some cities don't have geolocation data
-
   const filteredResponse = response.filter((city) => city !== null);
 
   res.status(200).json(
