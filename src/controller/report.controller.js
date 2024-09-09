@@ -149,6 +149,7 @@ const reportDetails = asyncHandler(async (_, res) => {
   });
 
   const barAndChartData = Object.keys(medicationDetails).map((medication) => {
+    console.log(medicationDetails[medication]);
     const totalCount = medicationDetails[medication].totalCount;
 
     // Create an array for medication details
