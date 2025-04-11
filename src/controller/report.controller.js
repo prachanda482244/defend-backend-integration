@@ -8,7 +8,17 @@ import { verifyCaptcha } from "../utils/validateCaptcha.js";
 const createReport = asyncHandler(async (req, res) => {
   const { age, medication, state, city, ipAddress, token, isEnable = true } = req.body;
 
-  if (!token) throw new ApiError(400, "Please fill the captcha to proceed.")
+  if (!token) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          [],
+          "Please fill the captcha to proceed."
+        )
+      )
+  }
   if ([medication, state, city].some((field) => field.trim() === "")) {
     throw new ApiError(400, "All fields are required.");
   }
@@ -154,7 +164,6 @@ const reportDetails = asyncHandler(async (_, res) => {
   });
 
   const barAndChartData = Object.keys(medicationDetails).map((medication) => {
-    console.log(medicationDetails[medication]);
     const totalCount = medicationDetails[medication].totalCount;
 
     // Create an array for medication details
