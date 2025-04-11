@@ -7,7 +7,7 @@ import { verifyCaptcha } from "../utils/validateCaptcha.js";
 
 const createReport = asyncHandler(async (req, res) => {
   const { age, medication, state, city, ipAddress, token, isEnable = true } = req.body;
-
+  console.log(isEnable, typeof isEnable)
   if (!token) {
     return res
       .status(400)
