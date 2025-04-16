@@ -38,7 +38,7 @@ const createReport = asyncHandler(async (req, res) => {
           new ApiResponse(
             429,
             [],
-            "Submission not allowed. Please wait 36 hours before trying again."
+            "To protect and ensure the authenticity and validity of the provided data, please allow 48 hours before entering another submission."
           )
         );
     }
