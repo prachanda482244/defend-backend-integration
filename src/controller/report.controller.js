@@ -331,14 +331,14 @@ const ipSettings = asyncHandler(async (req, res) => {
 
   const currentTime = new Date();
 
-  if (isEnable === "true") {
+  if (isEnable === "false") {
     return res
       .status(200)
       .json({ success: true, Message: "You can proceed to next step." });
   }
 
   let submission = await Report.findOne({ ipAddress });
-  if (submission) {
+  if (submission && isEnable === "true") {
     const timeDifference =
       (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
     if (timeDifference < 36) {
