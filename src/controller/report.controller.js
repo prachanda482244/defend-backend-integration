@@ -28,7 +28,7 @@ const createReport = asyncHandler(async (req, res) => {
   const currentTime = new Date();
 
   let submission = await Report.findOne({ ipAddress });
-  if (isEnable === "true" && submission) {
+  if (isEnable && submission) {
     const timeDifference =
       (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
     if (timeDifference < 36) {
@@ -331,14 +331,15 @@ const ipSettings = asyncHandler(async (req, res) => {
 
   const currentTime = new Date();
 
-  if (isEnable === "false") {
+  if (!isEnable) {
     return res
       .status(200)
       .json({ success: true, Message: "You can proceed to next step." });
   }
 
   let submission = await Report.findOne({ ipAddress });
-  if (submission && isEnable === "true") {
+
+  if (submission && isEnable) {
     const timeDifference =
       (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
     if (timeDifference < 36) {
