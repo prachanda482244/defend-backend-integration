@@ -68,7 +68,7 @@ const createReport = asyncHandler(async (req, res) => {
 
     if (!report) throw new ApiError(400, "Failed to create the report");
 
-    return res.status(200).json(new ApiResponse(200, report, "Report added."));
+    return res.status(200).json(new ApiResponse(200, "report tru", "Report added."));
   }
 });
 
