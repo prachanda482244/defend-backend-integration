@@ -73,7 +73,7 @@ const createReport = asyncHandler(async (req, res) => {
 });
 
 const reportDetails = asyncHandler(async (_, res) => {
-  const report = await Report.find();
+  const report = await Report.find()
   if (!report) throw new ApiError(400, "Report not found");
   const totalRecords = report.length;
 
@@ -234,6 +234,7 @@ const reportDetails = asyncHandler(async (_, res) => {
     );
 
     return {
+
       ucName: state.toUpperCase(),
       value: totalStateCount,
       ageGroups,
@@ -325,4 +326,27 @@ const reportDetails = asyncHandler(async (_, res) => {
   );
 });
 
-export { createReport, reportDetails };
+const ipSettings = asyncHandler(async (req, res) => {
+  const { ipAddress } = req.body
+  if (!ipAddress) throw new ApiError(404, "Ip not found")
+  const currentTime = new Date();
+  let submission = await Report.findOne({ ipAddress });
+  if (submission) {
+    const timeDifference =
+      (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
+    if (timeDifference < 36) {
+      return res
+        .status(429)
+        .json(
+          new ApiResponse(
+            429,
+            [],
+            "To protect and ensure the authenticity and validity of the provided data, please allow 48 hours before entering another submission."
+          )
+        );
+    }
+  }
+
+  res.status(200).json({ success: true, Message: "You can proceed to next step." })
+})
+export { createReport, reportDetails, ipSettings };
