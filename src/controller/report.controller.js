@@ -6,7 +6,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { verifyCaptcha } from "../utils/validateCaptcha.js";
 
 const createReport = asyncHandler(async (req, res) => {
-  const { age, medication, state, city, ipAddress, token, isEnable = true } = req.body;
+  const { age, medication, state, city, ipAddress, token } = req.body;
   if (!token) {
     return res
       .status(400)
@@ -26,50 +26,19 @@ const createReport = asyncHandler(async (req, res) => {
   if (!validation?.success) throw new ApiError(400, "Captcha timeout or duplicate")
   const location = `${state} ${city}`;
   const currentTime = new Date();
+  const report = await Report.create({
+    age,
+    medication,
+    state,
+    city,
+    location,
+    ipAddress,
+    lastSubmission: currentTime,
+  });
 
-  let submission = await Report.findOne({ ipAddress });
-  if (isEnable && submission) {
-    const timeDifference =
-      (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
-    if (timeDifference < 36) {
-      return res
-        .status(429)
-        .json(
-          new ApiResponse(
-            429,
-            [],
-            "To protect and ensure the authenticity and validity of the provided data, please allow 48 hours before entering another submission."
-          )
-        );
-    }
+  if (!report) throw new ApiError(400, "Failed to create the report");
 
-    // Update the lastSubmission time and save the report
-    submission.age = age;
-    submission.medication = medication;
-    submission.state = state;
-    submission.city = city;
-    submission.location = location;
-    submission.lastSubmission = currentTime;
-    await submission.save();
-
-    return res
-      .status(200)
-      .json(new ApiResponse(200, submission, "Report updated."));
-  } else {
-    const report = await Report.create({
-      age,
-      medication,
-      state,
-      city,
-      location,
-      ipAddress,
-      lastSubmission: currentTime,
-    });
-
-    if (!report) throw new ApiError(400, "Failed to create the report");
-
-    return res.status(200).json(new ApiResponse(200, "report tru", "Report added."));
-  }
+  return res.status(200).json(new ApiResponse(200, report, "Report Created."));
 });
 
 const reportDetails = asyncHandler(async (_, res) => {
