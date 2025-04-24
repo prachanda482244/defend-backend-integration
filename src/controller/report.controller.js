@@ -3,10 +3,11 @@ import { Report } from "../model/reportModel.model.js";
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { verifyCaptcha } from "../utils/validateCaptcha.js";
 
 const createReport = asyncHandler(async (req, res) => {
-  const { age, medication, state, city, ipAddress, token, isEnable = true } = req.body;
+  const { age, medication, state, city, ipAddress, token } = req.body;
   if (!token) {
     return res
       .status(400)
