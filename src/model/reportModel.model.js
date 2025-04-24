@@ -28,6 +28,12 @@ const reportSchema = new Schema(
     lastSubmission: {
       type: Date,
     },
+    image: {
+      type: String,
+    },
+    cloudinaryPublicId: {
+      type: String
+    }
   },
   { timestamps: true }
 );
