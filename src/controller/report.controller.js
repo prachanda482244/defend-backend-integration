@@ -3,7 +3,6 @@ import { Report } from "../model/reportModel.model.js";
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { verifyCaptcha } from "../utils/validateCaptcha.js";
 
 const createReport = asyncHandler(async (req, res) => {
@@ -24,31 +23,53 @@ const createReport = asyncHandler(async (req, res) => {
   }
 
   const validation = await verifyCaptcha(token)
-  if (!validation?.success) throw new ApiError(400, validation['error-codes']?.[0] || "Captcha timeout or duplicate")
+  if (!validation?.success) throw new ApiError(400, "Captcha timeout or duplicate")
   const location = `${state} ${city}`;
   const currentTime = new Date();
-  const imageLocalPath = req.file?.path;
 
-  if (!imageLocalPath) {
-    throw new ApiError(404, "Avatar not found");
+  let submission = await Report.findOne({ ipAddress });
+  if (isEnable === "true" && submission) {
+    const timeDifference =
+      (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
+    if (timeDifference < 36) {
+      return res
+        .status(429)
+        .json(
+          new ApiResponse(
+            429,
+            [],
+            "To protect and ensure the authenticity and validity of the provided data, please allow 48 hours before entering another submission."
+          )
+        );
+    }
+
+    // Update the lastSubmission time and save the report
+    submission.age = age;
+    submission.medication = medication;
+    submission.state = state;
+    submission.city = city;
+    submission.location = location;
+    submission.lastSubmission = currentTime;
+    await submission.save();
+
+    return res
+      .status(200)
+      .json(new ApiResponse(200, submission, "Report updated."));
+  } else {
+    const report = await Report.create({
+      age,
+      medication,
+      state,
+      city,
+      location,
+      ipAddress,
+      lastSubmission: currentTime,
+    });
+
+    if (!report) throw new ApiError(400, "Failed to create the report");
+
+    return res.status(200).json(new ApiResponse(200, report, "Report added."));
   }
-  const avatar = await uploadOnCloudinary(imageLocalPath)
-
-  const report = await Report.create({
-    age,
-    medication,
-    state,
-    city,
-    location,
-    ipAddress,
-    lastSubmission: currentTime,
-    image: avatar?.url,
-    cloudinaryPublicId: avatar?.public_id
-  });
-
-  if (!report) throw new ApiError(400, "Failed to create the report");
-
-  return res.status(200).json(new ApiResponse(200, report, "Report added."));
 });
 
 const reportDetails = asyncHandler(async (_, res) => {
@@ -304,4 +325,27 @@ const reportDetails = asyncHandler(async (_, res) => {
   );
 });
 
-export { createReport, reportDetails };
+const getIpInfo = asyncHandler(async (req, res) => {
+  const { ipAddress, isEnable = false } = req.body
+  let submission = await Report.findOne({ ipAddress });
+  if (isEnable && submission) {
+    const currentTime = Date.now()
+    const timeDifference =
+      (currentTime - submission.lastSubmission) / (1000 * 60 * 60);
+    if (timeDifference < 36) {
+      return res
+        .status(429)
+        .json(
+          new ApiResponse(
+            429,
+            [],
+            "To protect and ensure the authenticity and validity of the provided data, please allow 48 hours before entering another submission."
+          )
+        );
+    }
+  }
+  return res.status(200).json(
+    new ApiResponse(200, { success: true }, "Proceeed")
+  )
+})
+export { createReport, reportDetails, getIpInfo };
