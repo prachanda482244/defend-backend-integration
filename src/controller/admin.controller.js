@@ -67,12 +67,14 @@ const getAllReports = asyncHandler(async (req, res) => {
                                     $lt: nextDate,
                               },
                         },
+                        { ipAddress: regex }
                   ];
             } else {
                   query.$or = [
                         { medication: regex },
                         { city: regex },
-                        { location: regex }
+                        { location: regex },
+                        { ipAddress: regex }
                   ];
             }
       }
