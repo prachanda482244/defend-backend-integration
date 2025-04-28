@@ -40,7 +40,7 @@ const getAllReports = asyncHandler(async (req, res) => {
 
       let query = {};
 
-      if (["approved", "pending", "rejected"].includes(filter)) {
+      if (["approved", "new", "rejected"].includes(filter)) {
             query.isQualify = filter;
       }
 
