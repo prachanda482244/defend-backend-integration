@@ -30,7 +30,7 @@ const reportSchema = new Schema(
     },
     isQualify: {
       type: String,
-      enum: ["approved", "new", "rejected"],
+      enum: ["approved", "new", "rejected", "auto-approved"],
       default: "new",
     },
     source: {

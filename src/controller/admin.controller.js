@@ -69,8 +69,9 @@ const getAllReports = asyncHandler(async (req, res) => {
 
 const updateAllReport = asyncHandler(async (req, res) => {
       const up = await Report.updateMany(
-            { isQualify: { $exists: false } },
-            { $set: { isQualify: "approved" } }
+
+            { isQualify: "approved" },
+            { $set: { isQualify: "auto-approved" } }
       );
       if (!up) throw new ApiError(400, "failed to update")
       res.status(200).json({
