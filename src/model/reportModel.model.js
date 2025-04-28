@@ -35,13 +35,13 @@ const reportSchema = new Schema(
     },
     source: {
       type: String,
+    },
+    image: {
+      type: String,
+    },
+    cloudinaryPublicId: {
+      type: String
     }
-    // image: {
-    //   type: String,
-    // },
-    // cloudinaryPublicId: {
-    //   type: String
-    // }
   },
   { timestamps: true }
 );
