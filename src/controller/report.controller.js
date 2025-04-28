@@ -27,12 +27,12 @@ const createReport = asyncHandler(async (req, res) => {
   if (!validation?.success) throw new ApiError(400, validation['error-codes']?.[0] || "Captcha timeout or duplicate")
   const location = `${state} ${city}`;
   const currentTime = new Date();
-  // const imageLocalPath = req.file?.path;
+  const imageLocalPath = req.file?.path;
 
-  // if (!imageLocalPath) {
-  //   throw new ApiError(404, "Avatar not found");
-  // }
-  // const avatar = await uploadOnCloudinary(imageLocalPath)
+  if (!imageLocalPath) {
+    throw new ApiError(404, "Avatar not found");
+  }
+  const avatar = await uploadOnCloudinary(imageLocalPath)
 
   const report = await Report.create({
     age,
@@ -43,8 +43,8 @@ const createReport = asyncHandler(async (req, res) => {
     ipAddress,
     source,
     lastSubmission: currentTime,
-    // image: avatar?.url,
-    // cloudinaryPublicId: avatar?.public_id
+    image: avatar?.url,
+    cloudinaryPublicId: avatar?.public_id
   });
 
   if (!report) throw new ApiError(400, "Failed to create the report");

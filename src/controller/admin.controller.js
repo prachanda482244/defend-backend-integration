@@ -31,21 +31,52 @@ const updateApproval = asyncHandler(async (req, res) => {
             new ApiResponse(200, report, "Report has been approved/rejected")
       );
 });
-
 const getAllReports = asyncHandler(async (req, res) => {
-      let { limit = 10, page = 1, filter = "all", source = "all" } = req.query;
+      let { limit = 10, page = 1, filter = "all", source = "all", q } = req.query;
 
       limit = parseInt(limit);
       page = parseInt(page);
       const skip = (page - 1) * limit;
 
       let query = {};
+
       if (["approved", "pending", "rejected"].includes(filter)) {
             query.isQualify = filter;
       }
+
       if (["defent.com", "defentdiagnosis.com"].includes(source?.toLowerCase())) {
             query.source = new RegExp(`^${source}$`, 'i');
       }
+
+      if (q) {
+            const regex = new RegExp(q, 'i');
+            const dateQ = new Date(q);
+            const isValidDate = !isNaN(dateQ.getTime());
+
+            if (isValidDate) {
+                  const nextDate = new Date(dateQ);
+                  nextDate.setDate(dateQ.getDate() + 1);
+
+                  query.$or = [
+                        { medication: regex },
+                        { city: regex },
+                        { location: regex },
+                        {
+                              createdAt: {
+                                    $gte: dateQ,
+                                    $lt: nextDate,
+                              },
+                        },
+                  ];
+            } else {
+                  query.$or = [
+                        { medication: regex },
+                        { city: regex },
+                        { location: regex }
+                  ];
+            }
+      }
+
       const totalReports = await Report.countDocuments(query);
 
       const reports = await Report.find(query)
@@ -79,8 +110,26 @@ const updateAllReport = asyncHandler(async (req, res) => {
             data: up
       })
 })
+
+const getSingleReport = asyncHandler(async (req, res) => {
+      const { reportId } = req.params
+      if (!reportId) throw new ApiError(404, "Report id not found")
+      const report = await Report.findById(reportId).lean()
+      if (!report) throw new ApiError(404, `Report not found for this ${reportId}`)
+      return res.status(200).json(new ApiResponse(200, report, "Single Report data"))
+})
+const deleteReport = asyncHandler(async (req, res) => {
+      const { reportId } = req.params
+      if (!reportId) throw new ApiError(404, "Report id not found")
+
+      const deletedReport = await Report.findByIdAndDelete(reportId)
+      if (!deletedReport) throw new ApiError(400, "Failed to delete report")
+      return res.status(200).json(new ApiResponse(200, {}, "Report deleted"))
+})
 export {
       updateApproval,
       getAllReports,
-      updateAllReport
+      updateAllReport,
+      getSingleReport,
+      deleteReport
 }

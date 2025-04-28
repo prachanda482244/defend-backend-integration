@@ -8,8 +8,8 @@ import { upload } from "../middleware/multer.middleware.js";
 
 const reportRouter = Router();
 reportRouter.route("/").get(reportDetails);
-// upload.single("image")
-reportRouter.route("/create-report").post(createReport);
+
+reportRouter.route("/create-report").post(upload.single("image"), createReport);
 reportRouter.route("/ip-setting").post(getIpInfo);
 
 export default reportRouter;
