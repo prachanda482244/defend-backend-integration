@@ -5,6 +5,7 @@ import cors from "cors";
 import { PORT } from "./config/constants.js";
 import reportRouter from "./routes/reportRouter.route.js";
 import chartRouter from "./routes/chart.route.js";
+import adminRouter from "./routes/admin.route.js";
 const app = express();
 connectToDb();
 
@@ -16,8 +17,9 @@ app.use(express.static("public"));
 
 app.use("/api/v1/report", reportRouter);
 app.use("/api/v1/chart", chartRouter);
+app.use("/api/v1/admin", adminRouter);
 
-app.get("/testing", (req, res) => {
+app.get("/testing", (_, res) => {
   res.status(200).json({
     success: true,
     data: [

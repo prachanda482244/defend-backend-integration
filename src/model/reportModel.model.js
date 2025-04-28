@@ -28,6 +28,14 @@ const reportSchema = new Schema(
     lastSubmission: {
       type: Date,
     },
+    isQualify: {
+      type: String,
+      enum: ["approved", "new", "rejected"],
+      default: "new",
+    },
+    source: {
+      type: String,
+    }
     // image: {
     //   type: String,
     // },

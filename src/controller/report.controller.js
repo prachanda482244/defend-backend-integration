@@ -7,7 +7,7 @@ import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { verifyCaptcha } from "../utils/validateCaptcha.js";
 
 const createReport = asyncHandler(async (req, res) => {
-  const { age, medication, state, city, ipAddress, token } = req.body;
+  const { age, medication, state, city, ipAddress, token, source } = req.body;
   if (!token) {
     return res
       .status(400)
@@ -41,6 +41,7 @@ const createReport = asyncHandler(async (req, res) => {
     city,
     location,
     ipAddress,
+    source,
     lastSubmission: currentTime,
     // image: avatar?.url,
     // cloudinaryPublicId: avatar?.public_id
