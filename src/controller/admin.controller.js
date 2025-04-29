@@ -31,8 +31,19 @@ const updateApproval = asyncHandler(async (req, res) => {
             new ApiResponse(200, report, "Report has been approved/rejected")
       );
 });
+
 const getAllReports = asyncHandler(async (req, res) => {
-      let { limit = 10, page = 1, filter = "all", source = "all", q } = req.query;
+      let {
+            limit = 10,
+            page = 1,
+            filter = "all",
+            source = "all",
+            q,
+            state,
+            status,
+            medication,
+            age,
+      } = req.query;
 
       limit = parseInt(limit);
       page = parseInt(page);
@@ -40,43 +51,65 @@ const getAllReports = asyncHandler(async (req, res) => {
 
       let query = {};
 
-      if (["approved", "new", "rejected"].includes(filter)) {
+      if (["approved", "new", "rejected", "auto-approved"].includes(filter)) {
             query.isQualify = filter;
       }
 
       if (["defent.com", "defentdiagnosis.com"].includes(source?.toLowerCase())) {
-            query.source = new RegExp(`^${source}$`, 'i');
+            query.source = new RegExp(`^${source}$`, "i");
+      }
+
+      if (state) {
+            query.state = new RegExp(`^${state}$`, "i");
+      }
+      if (status) {
+            query.isQualify = new RegExp(`^${status}$`, "i");
+      }
+      if (medication) {
+            query.medication = new RegExp(`^${medication}$`, "i");
+      }
+      if (age) {
+            query.age = new RegExp(`^${age}$`, "i");
       }
 
       if (q) {
-            const regex = new RegExp(q, 'i');
+            const regex = new RegExp(q, "i");
             const dateQ = new Date(q);
             const isValidDate = !isNaN(dateQ.getTime());
+
+            const orConditions = [];
 
             if (isValidDate) {
                   const nextDate = new Date(dateQ);
                   nextDate.setDate(dateQ.getDate() + 1);
 
-                  query.$or = [
+                  orConditions.push(
                         { medication: regex },
                         { city: regex },
                         { location: regex },
+                        { ipAddress: regex },
                         {
                               createdAt: {
                                     $gte: dateQ,
                                     $lt: nextDate,
                               },
-                        },
-                        { ipAddress: regex }
-                  ];
+                        }
+                  );
             } else {
-                  query.$or = [
+                  orConditions.push(
                         { medication: regex },
                         { city: regex },
                         { location: regex },
                         { ipAddress: regex }
-                  ];
+                  );
             }
+
+            query = {
+                  $and: [
+                        query,
+                        { $or: orConditions }
+                  ]
+            };
       }
 
       const totalReports = await Report.countDocuments(query);
@@ -95,10 +128,15 @@ const getAllReports = asyncHandler(async (req, res) => {
             hasPrevPage: page > 1,
       };
 
-      return res.status(200).json(
-            new ApiResponse(200, { metadata, reports }, "Filtered reports information")
-      );
+      return res
+            .status(200)
+            .json(
+                  new ApiResponse(200, { metadata, reports }, "Filtered reports information")
+            );
 });
+
+
+
 
 const updateAllReport = asyncHandler(async (req, res) => {
       const up = await Report.updateMany(
