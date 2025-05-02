@@ -53,8 +53,9 @@ const createReport = asyncHandler(async (req, res) => {
 });
 
 const reportDetails = asyncHandler(async (_, res) => {
-  const report = await Report.find();
-  if (!report) throw new ApiError(400, "Report not found");
+  const reportSnap = await Report.find();
+  if (!reportSnap) throw new ApiError(400, "Report not found");
+  const report = reportSnap.filter(r => r.isQualify !== 'new' && r.isQualify !== 'rejected')
   const totalRecords = report.length;
 
   // Initialize aggregation containers
