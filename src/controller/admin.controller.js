@@ -135,7 +135,15 @@ const getAllReports = asyncHandler(async (req, res) => {
             );
 });
 
+const bulkDelete = asyncHandler(async (req, res) => {
+      const { ids } = req.body
+      if (!Array.isArray(ids) || ids.length === 0) {
+            throw new ApiError(400, "No ids provided")
+      }
+      await Report.deleteMany({ _id: { $in: ids } });
+      return res.status(200).json(new ApiResponse(200, {}, "All entries deleted successfully"))
 
+})
 
 
 const updateAllReport = asyncHandler(async (req, res) => {
@@ -171,5 +179,6 @@ export {
       getAllReports,
       updateAllReport,
       getSingleReport,
-      deleteReport
+      deleteReport,
+      bulkDelete
 }
