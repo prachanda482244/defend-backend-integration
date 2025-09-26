@@ -29,3 +29,4 @@ const orderSchema = new Schema(
 );
 
 export const OrderModel = model("Order", orderSchema);
+OrderModel.createIndexes({ createdAt: 1 });

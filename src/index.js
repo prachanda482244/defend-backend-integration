@@ -7,6 +7,7 @@ import reportRouter from "./routes/reportRouter.route.js";
 import chartRouter from "./routes/chart.route.js";
 import adminRouter from "./routes/admin.route.js";
 import orderRouter from "./routes/order.route.js";
+import "./utils/cron.js";
 const app = express();
 connectToDb();
 
