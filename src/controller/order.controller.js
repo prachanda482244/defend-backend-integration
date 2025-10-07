@@ -6,7 +6,6 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 const createOrder = asyncHandler(async (req, res) => {
   const { firstName, lastName, streetAddress, postCode, email, productId } =
     req.body;
-
   if (
     !firstName ||
     !lastName ||
@@ -25,7 +24,9 @@ const createOrder = asyncHandler(async (req, res) => {
     const isOrderWithin30Days = currentDate - orderDate <= thirtyDaysInMillis;
 
     if (isOrderWithin30Days) {
-      throw new ApiError(400, "Address already used within the last 30 days");
+      return res
+        .status(200)
+        .json(new ApiResponse(400, null, "Address already used"));
     }
   }
 
