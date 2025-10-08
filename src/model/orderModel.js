@@ -20,10 +20,21 @@ const orderSchema = new Schema(
       type: String,
       required: true,
     },
+    subscription: {
+      type: String,
+      required: true,
+      default: "one_time",
+    },
+    isActive: {
+      type: Boolean,
+      default: false,
+    },
     email: {
       type: String,
       required: true,
     },
+    normalizedAddress: { type: String, index: true },
+    lastRenewAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
 );
