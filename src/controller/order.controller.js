@@ -43,7 +43,7 @@ const createOrder = asyncHandler(async (req, res) => {
   }
   const va = validateStreetAddress(_streetAddress);
   if (!va.ok) {
-    return res.status(200).json(new ApiResponse(200, null, va.error)); // or 400 if you prefer
+    return res.status(200).json(new ApiResponse(400, null, va.error)); // or 400 if you prefer
   }
   const streetAddress = va.value;
 
