@@ -1,17 +1,18 @@
 // sheet.js
 import { google } from "googleapis";
-import fs from "fs";
-import path from "path";
 
-const SPREADSHEET_ID = "1d2tXxlh95rwl7E8kT5WS_ooxDgZCzDYv8kHfDJ2-LRM";
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_TITLE = "Orders"; // tab name
 
 // Load JSON creds from project root
-const keyPath = path.resolve(process.cwd(), "credentials.json");
-const creds = JSON.parse(fs.readFileSync(keyPath, "utf8"));
+// const keyPath = path.resolve(process.cwd(), "credentials.json");
+// const creds = JSON.parse(fs.readFileSync(keyPath, "utf8"));
 
 // Auth WITHOUT deprecated options
 // Option A: GoogleAuth with credentials (clean, no warnings)
+const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+creds.private_key = creds.private_key.replace(/\\n/g, "\n");
+
 const auth = new google.auth.GoogleAuth({
   credentials: {
     client_email: creds.client_email,
@@ -65,6 +66,7 @@ async function ensureHeaderRow() {
           "First Name",
           "Last Name",
           "Street Address",
+          "City",
           "Post Code",
           "Email",
           "Subscription",
@@ -91,6 +93,7 @@ export async function appendOrderRow(o) {
       o.firstName || "",
       o.lastName || "",
       o.streetAddress || "",
+      "West Hollywood",
       o.postCode || "",
       o.email || "",
       o.subscription || "",

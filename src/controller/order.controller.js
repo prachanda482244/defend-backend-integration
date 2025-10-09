@@ -1,4 +1,8 @@
 import { OrderModel } from "../model/orderModel.js";
+import {
+  isWestHollywoodOK,
+  validateUSAddress,
+} from "../utils/addressValidation.js";
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -6,7 +10,6 @@ import { normalizeAddress } from "../utils/normalizeAddress.js";
 import { appendOrderRow } from "../utils/sheet.js";
 
 const joinMulti = (a) => (a && a.length ? a.join(", ") : "");
-
 const createOrder = asyncHandler(async (req, res) => {
   const {
     firstName,
@@ -23,6 +26,7 @@ const createOrder = asyncHandler(async (req, res) => {
     ethnicity,
     household_language,
   } = req.body;
+
   if (
     !firstName ||
     !lastName ||
@@ -31,18 +35,35 @@ const createOrder = asyncHandler(async (req, res) => {
     !email ||
     !productId ||
     !subscription
-  )
+  ) {
     throw new ApiError(400, "Missing required field");
+  }
 
-  const normalizedAddress = normalizeAddress(streetAddress);
+  // ---- Address validation (free, US-only) ----
+  const oneLine = `${streetAddress}, West Hollywood, CA ${String(
+    postCode
+  ).slice(0, 5)}`;
+  const v = await validateUSAddress(oneLine);
+  if (!v.ok)
+    return res.status(400).json(new ApiResponse(400, null, "Invalid address"));
+  if (!isWestHollywoodOK(v.components)) {
+    return res
+      .status(400)
+      .json(
+        new ApiResponse(
+          400,
+          "Service area is West Hollywood, CA (ZIPs: 90038, 90046, 90048, 90069)"
+        )
+      );
+  }
+  const normalizedAddress = v.normalized;
 
+  // ---- 30-day reuse check ----
   const existingOrder = await OrderModel.findOne({ normalizedAddress });
   if (existingOrder) {
-    const currentDate = new Date();
-    const orderDate = existingOrder.createdAt;
-    const thirtyDaysInMillis = 30 * 24 * 60 * 60 * 1000;
-    const isOrderWithin30Days = currentDate - orderDate <= thirtyDaysInMillis;
-
+    const isOrderWithin30Days =
+      Date.now() - existingOrder.createdAt.getTime() <=
+      30 * 24 * 60 * 60 * 1000;
     if (isOrderWithin30Days) {
       return res
         .status(200)
@@ -50,6 +71,7 @@ const createOrder = asyncHandler(async (req, res) => {
     }
   }
 
+  // ---- Create order ----
   const order = await OrderModel.create({
     firstName,
     lastName,
@@ -59,22 +81,21 @@ const createOrder = asyncHandler(async (req, res) => {
     subscription,
     isActive: subscription === "one_time" ? false : true,
     productId,
-    normalizedAddress,
+    normalizedAddress, // Census-normalized
   });
-
   if (!order) throw new ApiError(400, "Failed to create an order");
+
+  // ---- Append to Sheet (best-effort) ----
   try {
     await appendOrderRow({
       createdAt: order.createdAt,
       firstName: order.firstName,
       lastName: order.lastName,
       streetAddress: order.streetAddress,
-      postCode: order.postCode,
+      postCode: String(postCode).slice(0, 5),
       email: order.email,
       subscription: order.subscription,
       productId: order.productId,
-
-      // extras (labels or raw)
       age: age || "",
       gender: gender || "",
       identity: identity || "",
@@ -85,9 +106,9 @@ const createOrder = asyncHandler(async (req, res) => {
   } catch (e) {
     console.error("Sheets append failed:", e);
   }
+
   return res.status(200).json(new ApiResponse(200, order, "Order created"));
 });
-
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req.query.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 200);
