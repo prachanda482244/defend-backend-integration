@@ -45,13 +45,13 @@ const createOrder = asyncHandler(async (req, res) => {
   ).slice(0, 5)}`;
   const v = await validateUSAddress(oneLine);
   if (!v.ok)
-    return res.status(400).json(new ApiResponse(400, null, "Invalid address"));
+    return res.status(200).json(new ApiResponse(400, null, "Invalid address"));
   if (!isWestHollywoodOK(v.components)) {
     return res
-      .status(400)
+      .status(200)
       .json(
         new ApiResponse(
-          400,
+          200,
           "Service area is West Hollywood, CA (ZIPs: 90038, 90046, 90048, 90069)"
         )
       );
