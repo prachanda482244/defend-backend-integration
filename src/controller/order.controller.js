@@ -6,7 +6,10 @@ import {
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { normalizeAddress } from "../utils/normalizeAddress.js";
+import {
+  normalizeAddress,
+  validateStreetAddress,
+} from "../utils/normalizeAddress.js";
 import { appendOrderRow } from "../utils/sheet.js";
 
 const joinMulti = (a) => (a && a.length ? a.join(", ") : "");
@@ -14,7 +17,7 @@ const createOrder = asyncHandler(async (req, res) => {
   const {
     firstName,
     lastName,
-    streetAddress,
+    streetAddress: _streetAddress,
     postCode,
     email,
     productId,
@@ -30,7 +33,7 @@ const createOrder = asyncHandler(async (req, res) => {
   if (
     !firstName ||
     !lastName ||
-    !streetAddress ||
+    !_streetAddress ||
     !postCode ||
     !email ||
     !productId ||
@@ -38,6 +41,11 @@ const createOrder = asyncHandler(async (req, res) => {
   ) {
     throw new ApiError(400, "Missing required field");
   }
+  const va = validateStreetAddress(_streetAddress);
+  if (!va.ok) {
+    return res.status(200).json(new ApiResponse(200, null, va.error)); // or 400 if you prefer
+  }
+  const streetAddress = va.value;
 
   // ---- Address validation (free, US-only) ----
   const oneLine = `${streetAddress}, West Hollywood, CA ${String(
