@@ -1,12 +1,15 @@
 import { ApiResponse } from "./ApiResponse.js";
 
+// utils/normalizeAddress.js
 export const normalizeAddress = (s = "") =>
   s
-    .normalize("NFKD") // Unicode normalize
-    .toLowerCase() // case-insensitive
-    .replace(/[\s\W_]+/g, " ") // collapse all non-alnum to single space
-    .trim() // trim ends
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[\s\W_]+/g, " ")
+    .trim()
     .replace(/\s+/g, "");
+
+export const normalizeLine2 = (s = "") => normalizeAddress(s); // separate for clarity
 
 // validators/address.js
 const ADDRESS_ALLOWED = /^[0-9A-Za-z\s#\-.,/]+$/;

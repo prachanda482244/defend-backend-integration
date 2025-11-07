@@ -6,18 +6,22 @@ import {
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import {
-  normalizeAddress,
-  validateStreetAddress,
-} from "../utils/normalizeAddress.js";
+
 import { appendOrderRow } from "../utils/sheet.js";
 
 const joinMulti = (a) => (a && a.length ? a.join(", ") : "");
+import {
+  validateAddressLine1,
+  validateAddressLine2,
+} from "../validators/address.js";
+import { normalizeLine2 } from "../utils/normalizeAddress.js";
+
 const createOrder = asyncHandler(async (req, res) => {
   const {
     firstName,
     lastName,
-    streetAddress: _streetAddress,
+    streetAddress: _line1,
+    streetAddress2: _line2, // optional
     postCode,
     email,
     productId,
@@ -33,7 +37,7 @@ const createOrder = asyncHandler(async (req, res) => {
   if (
     !firstName ||
     !lastName ||
-    !_streetAddress ||
+    !_line1 ||
     !postCode ||
     !email ||
     !productId ||
@@ -41,16 +45,22 @@ const createOrder = asyncHandler(async (req, res) => {
   ) {
     throw new ApiError(400, "Missing required field");
   }
-  const va = validateStreetAddress(_streetAddress);
-  if (!va.ok) {
-    return res.status(200).json(new ApiResponse(400, null, va.error)); // or 400 if you prefer
-  }
-  const streetAddress = va.value;
 
-  // ---- Address validation (free, US-only) ----
-  const oneLine = `${streetAddress}, West Hollywood, CA ${String(
-    postCode
-  ).slice(0, 5)}`;
+  // Line 1
+  const v1 = validateAddressLine1(_line1);
+  if (!v1.ok) return res.status(200).json(new ApiResponse(400, null, v1.error));
+  const line1 = v1.value;
+
+  // Line 2 (optional)
+  const v2 = validateAddressLine2(_line2);
+  if (!v2.ok) return res.status(200).json(new ApiResponse(400, null, v2.error));
+  const line2 = v2.value; // "" if absent
+
+  // External US validation on Line 1 only
+  const oneLine = `${line1}, West Hollywood, CA ${String(postCode).slice(
+    0,
+    5
+  )}`;
   const v = await validateUSAddress(oneLine);
   if (!v.ok)
     return res.status(200).json(new ApiResponse(400, null, "Invalid address"));
@@ -64,42 +74,51 @@ const createOrder = asyncHandler(async (req, res) => {
         )
       );
   }
-  const normalizedAddress = v.normalized;
+  const normalizedAddress1 = v.normalized; // canonical from your API
+  const normalizedAddress2 = line2 ? normalizeLine2(line2) : ""; // normalized second line
 
-  // ---- 30-day reuse check ----
-  const existingOrder = await OrderModel.findOne({ normalizedAddress });
-  if (existingOrder) {
-    const isOrderWithin30Days =
-      Date.now() - existingOrder.createdAt.getTime() <=
-      30 * 24 * 60 * 60 * 1000;
-    if (isOrderWithin30Days) {
-      return res
-        .status(200)
-        .json(new ApiResponse(400, null, "Address already used"));
-    }
+  // 30-day reuse rule:
+  // If Line2 present → check reuse by Line2 only.
+  // Else             → check reuse by Line1 only.
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+  const query = line2
+    ? { normalizedAddress2 } // check second line only
+    : { normalizedAddress: normalizedAddress1 }; // else check first line only
+
+  const existingOrder = await OrderModel.findOne(query);
+  if (
+    existingOrder &&
+    Date.now() - existingOrder.createdAt.getTime() <= thirtyDaysMs
+  ) {
+    return res
+      .status(200)
+      .json(new ApiResponse(400, null, "Address already used"));
   }
 
-  // ---- Create order ----
+  // Create
   const order = await OrderModel.create({
     firstName,
     lastName,
-    streetAddress,
+    streetAddress: line1,
+    streetAddress2: line2 || null,
     postCode,
     email,
-    subscription,
-    isActive: subscription === "one_time" ? false : true,
     productId,
-    normalizedAddress, // Census-normalized
+    subscription,
+    isActive: subscription !== "one_time",
+    normalizedAddress: normalizedAddress1,
+    normalizedAddress2: normalizedAddress2 || null,
   });
   if (!order) throw new ApiError(400, "Failed to create an order");
 
-  // ---- Append to Sheet (best-effort) ----
+  // Sheets
   try {
     await appendOrderRow({
       createdAt: order.createdAt,
       firstName: order.firstName,
       lastName: order.lastName,
       streetAddress: order.streetAddress,
+      streetAddress2: order.streetAddress2 || "",
       postCode: String(postCode).slice(0, 5),
       email: order.email,
       subscription: order.subscription,
@@ -117,6 +136,7 @@ const createOrder = asyncHandler(async (req, res) => {
 
   return res.status(200).json(new ApiResponse(200, order, "Order created"));
 });
+
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req.query.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 200);

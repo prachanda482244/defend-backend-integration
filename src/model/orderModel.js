@@ -16,6 +16,9 @@ const orderSchema = new Schema(
       type: String,
       required: true,
     },
+    streetAddress2: {
+      type: String,
+    },
     postCode: {
       type: String,
       required: true,
@@ -34,6 +37,8 @@ const orderSchema = new Schema(
       required: true,
     },
     normalizedAddress: { type: String, index: true },
+    normalizedAddress2: { type: String, default: null },
+
     lastRenewAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
