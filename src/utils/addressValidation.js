@@ -1,3 +1,5 @@
+import { normalizeAddress } from "./normalizeAddress.js";
+
 const CENSUS_URL =
   "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress";
 
@@ -38,4 +40,35 @@ export function isWestHollywoodOK(components) {
   const stateOK = (components.state || "").toUpperCase() === "CA";
   const zipOK = ALLOWED_ZIPS.has(components.zip5 || "");
   return cityOK && stateOK && zipOK;
+}
+
+// More strict version that catches addresses that are too similar
+export function areAddressLinesSame(line1, line2) {
+  if (!line2) return false;
+
+  const normalizedLine1 = normalizeAddress(line1);
+  const normalizedLine2 = normalizeAddress(line2);
+
+  // Direct equality check
+  if (normalizedLine1 === normalizedLine2) return true;
+
+  // Additional checks for common variations
+  const removeCommonPrefixes = (str) => {
+    return str
+      .replace(/^(apt|apartment|unit|suite|ste|#|no|number)\s*/g, "")
+      .replace(/^\d+\s*/g, ""); // Remove leading unit numbers
+  };
+
+  const cleanLine1 = removeCommonPrefixes(normalizedLine1);
+  const cleanLine2 = removeCommonPrefixes(normalizedLine2);
+
+  // Check if one contains the other (with some length threshold)
+  const minLength = Math.min(cleanLine1.length, cleanLine2.length);
+  if (minLength > 5) {
+    if (cleanLine1.includes(cleanLine2) || cleanLine2.includes(cleanLine1)) {
+      return true;
+    }
+  }
+
+  return false;
 }

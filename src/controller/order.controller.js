@@ -1,5 +1,6 @@
 import { OrderModel } from "../model/orderModel.js";
 import {
+  areAddressLinesSame,
   isWestHollywoodOK,
   validateUSAddress,
 } from "../utils/addressValidation.js";
@@ -15,7 +16,6 @@ import {
   validateAddressLine2,
 } from "../validators/address.js";
 import { normalizeLine2 } from "../utils/normalizeAddress.js";
-
 const createOrder = asyncHandler(async (req, res) => {
   const {
     firstName,
@@ -56,6 +56,19 @@ const createOrder = asyncHandler(async (req, res) => {
   if (!v2.ok) return res.status(200).json(new ApiResponse(400, null, v2.error));
   const line2 = v2.value; // "" if absent
 
+  // Validate that address line 1 and line 2 are different
+  if (line2 && areAddressLinesSame(line1, line2)) {
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "Address line 1 and line 2 cannot be the same"
+        )
+      );
+  }
+
   // External US validation on Line 1 only
   const oneLine = `${line1}, West Hollywood, CA ${String(postCode).slice(
     0,
@@ -81,9 +94,18 @@ const createOrder = asyncHandler(async (req, res) => {
   // If Line2 present → check reuse by Line2 only.
   // Else             → check reuse by Line1 only.
   const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-  const query = line2
-    ? { normalizedAddress2 } // check second line only
-    : { normalizedAddress: normalizedAddress1 }; // else check first line only
+
+  let query;
+  if (line2) {
+    // When both lines exist, check the COMBINATION of both
+    query = {
+      normalizedAddress: normalizedAddress1,
+      normalizedAddress2: normalizedAddress2,
+    };
+  } else {
+    // When only line1 exists, check line1 only
+    query = { normalizedAddress: normalizedAddress1 };
+  }
 
   const existingOrder = await OrderModel.findOne(query);
   if (
@@ -94,7 +116,6 @@ const createOrder = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(400, null, "Address already used"));
   }
-
   // Create
   const order = await OrderModel.create({
     firstName,
