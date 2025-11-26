@@ -7,6 +7,7 @@ import {
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { logSuccess, logFailure } from "../utils/logger.js";
 
 import { appendOrderRow } from "../utils/sheet.js";
 
@@ -21,7 +22,7 @@ const createOrder = asyncHandler(async (req, res) => {
     firstName,
     lastName,
     streetAddress: _line1,
-    streetAddress2: _line2, // optional
+    streetAddress2: _line2,
     postCode,
     email,
     productId,
@@ -34,6 +35,7 @@ const createOrder = asyncHandler(async (req, res) => {
     household_language,
   } = req.body;
 
+  // Missing required fields
   if (
     !firstName ||
     !lastName ||
@@ -43,80 +45,74 @@ const createOrder = asyncHandler(async (req, res) => {
     !productId ||
     !subscription
   ) {
-    throw new ApiError(400, "Missing required field");
+    logFailure({ reason: "Missing required field", request: req.body });
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Missing required field"));
   }
 
-  // Line 1
+  // Line 1 validate
   const v1 = validateAddressLine1(_line1);
-  if (!v1.ok) return res.status(200).json(new ApiResponse(400, null, v1.error));
+  if (!v1.ok) {
+    logFailure({ reason: v1.error, request: req.body });
+    return res.status(200).json(new ApiResponse(400, null, v1.error));
+  }
   const line1 = v1.value;
 
-  // Line 2 (optional)
+  // Line 2 validate
   const v2 = validateAddressLine2(_line2);
-  if (!v2.ok) return res.status(200).json(new ApiResponse(400, null, v2.error));
-  const line2 = v2.value; // "" if absent
+  if (!v2.ok) {
+    logFailure({ reason: v2.error, request: req.body });
+    return res.status(200).json(new ApiResponse(400, null, v2.error));
+  }
+  const line2 = v2.value;
 
-  // Validate that address line 1 and line 2 are different
+  // Validate address lines are not same
   if (line2 && areAddressLinesSame(line1, line2)) {
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(
-          400,
-          null,
-          "Address line 1 and line 2 cannot be the same"
-        )
-      );
+    const msg = "Address line 1 and line 2 cannot be the same";
+    logFailure({ reason: msg, request: req.body });
+    return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
-  // External US validation on Line 1 only
+  // External US validation
   const oneLine = `${line1}, West Hollywood, CA ${String(postCode).slice(
     0,
     5
   )}`;
   const v = await validateUSAddress(oneLine);
-  if (!v.ok)
+  if (!v.ok) {
+    logFailure({ reason: "Invalid address", request: req.body });
     return res.status(200).json(new ApiResponse(400, null, "Invalid address"));
+  }
+
   if (!isWestHollywoodOK(v.components)) {
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(
-          200,
-          "Service area is West Hollywood, CA (ZIPs: 90038, 90046, 90048, 90069)"
-        )
-      );
+    const msg =
+      "Service area is West Hollywood, CA (ZIPs: 90038, 90046, 90048, 90069)";
+    logFailure({ reason: msg, request: req.body });
+    return res.status(200).json(new ApiResponse(200, msg));
   }
-  const normalizedAddress1 = v.normalized; // canonical from your API
-  const normalizedAddress2 = line2 ? normalizeLine2(line2) : ""; // normalized second line
 
-  // 30-day reuse rule:
-  // If Line2 present → check reuse by Line2 only.
-  // Else             → check reuse by Line1 only.
-  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+  const normalizedAddress1 = v.normalized;
+  const normalizedAddress2 = line2 ? normalizeLine2(line2) : "";
 
-  let query;
-  if (line2) {
-    // When both lines exist, check the COMBINATION of both
-    query = {
-      normalizedAddress: normalizedAddress1,
-      normalizedAddress2: normalizedAddress2,
-    };
-  } else {
-    // When only line1 exists, check line1 only
-    query = { normalizedAddress: normalizedAddress1 };
-  }
+  const thirtyDaysMs = 30 * 86400000;
+
+  const query = line2
+    ? { normalizedAddress: normalizedAddress1, normalizedAddress2 }
+    : { normalizedAddress: normalizedAddress1 };
 
   const existingOrder = await OrderModel.findOne(query);
+
   if (
     existingOrder &&
     Date.now() - existingOrder.createdAt.getTime() <= thirtyDaysMs
   ) {
-    return res
-      .status(200)
-      .json(new ApiResponse(400, null, "Address already used"));
+    const msg = "Address already used";
+    logFailure({ reason: msg, request: req.body });
+    return res.status(200).json(new ApiResponse(400, null, msg));
   }
-  // Create
+
+  // Create order
   const order = await OrderModel.create({
     firstName,
     lastName,
@@ -130,7 +126,16 @@ const createOrder = asyncHandler(async (req, res) => {
     normalizedAddress: normalizedAddress1,
     normalizedAddress2: normalizedAddress2 || null,
   });
-  if (!order) throw new ApiError(400, "Failed to create an order");
+
+  if (!order) {
+    logFailure({
+      reason: "Failed to create an order after validation",
+      request: req.body,
+    });
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "Failed to create an order"));
+  }
 
   // Sheets
   try {
@@ -154,6 +159,15 @@ const createOrder = asyncHandler(async (req, res) => {
   } catch (e) {
     console.error("Sheets append failed:", e);
   }
+
+  // SUCCESS LOG
+  logSuccess({
+    message: "Order created successfully",
+    orderId: order._id,
+    email,
+    productId,
+    timestamp: new Date(),
+  });
 
   return res.status(200).json(new ApiResponse(200, order, "Order created"));
 });

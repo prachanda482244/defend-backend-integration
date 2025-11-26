@@ -11,6 +11,8 @@ import "./utils/cron.js";
 const app = express();
 connectToDb();
 
+app.use("/logs", express.static("logs"));
+
 app.use(cors({ origin: "*" }));
 app.use(cookieParser());
 app.use(express.json({ limit: "20mb" }));
