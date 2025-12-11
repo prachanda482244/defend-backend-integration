@@ -136,7 +136,7 @@ const createOrder = asyncHandler(async (req, res) => {
       .status(400)
       .json(new ApiResponse(400, null, "Failed to create an order"));
   }
-
+  console.log("Order created:", order._id);
   // Sheets
   try {
     await appendOrderRow({
@@ -172,6 +172,59 @@ const createOrder = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, order, "Order created"));
 });
 
+// const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
+//   const page = Math.max(parseInt(req.query.page) || 1, 1);
+//   const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 200);
+
+//   const now = new Date();
+//   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+//   // monthly first, then one_time, then others; newest first inside groups
+//   const pipeline = [
+//     { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+//     {
+//       $addFields: {
+//         _subWeight: {
+//           $switch: {
+//             branches: [
+//               { case: { $eq: ["$subscription", "monthly"] }, then: 0 },
+//               { case: { $eq: ["$subscription", "one_time"] }, then: 2 },
+//             ],
+//             default: 1,
+//           },
+//         },
+//       },
+//     },
+//     { $sort: { _subWeight: 1, createdAt: -1, _id: 1 } },
+//     {
+//       $facet: {
+//         data: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+//         meta: [{ $count: "total" }],
+//       },
+//     },
+//     {
+//       $project: {
+//         data: 1,
+//         total: { $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0] },
+//       },
+//     },
+//   ];
+
+//   const [result] = await OrderModel.aggregate(pipeline);
+//   const data = result?.data || [];
+//   const total = result?.total || 0;
+
+//   return res.status(200).json({
+//     success: true,
+//     message: "Orders fetched successfully",
+//     data,
+//     page,
+//     limit,
+//     total,
+//     totalPages: Math.ceil(total / limit) || 1,
+//   });
+// });
+
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req.query.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 200);
@@ -179,29 +232,31 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  // monthly first, then one_time, then others; newest first inside groups
   const pipeline = [
-    { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+    // Filter orders created in the last 30 days
     {
-      $addFields: {
-        _subWeight: {
-          $switch: {
-            branches: [
-              { case: { $eq: ["$subscription", "monthly"] }, then: 0 },
-              { case: { $eq: ["$subscription", "one_time"] }, then: 2 },
-            ],
-            default: 1,
-          },
-        },
+      $match: {
+        createdAt: { $gte: thirtyDaysAgo },
       },
     },
-    { $sort: { _subWeight: 1, createdAt: -1, _id: 1 } },
+
+    // Sort newest → oldest
+    {
+      $sort: {
+        createdAt: -1,
+        _id: -1,
+      },
+    },
+
+    // Pagination
     {
       $facet: {
         data: [{ $skip: (page - 1) * limit }, { $limit: limit }],
         meta: [{ $count: "total" }],
       },
     },
+
+    // Format output
     {
       $project: {
         data: 1,
