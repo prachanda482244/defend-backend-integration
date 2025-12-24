@@ -233,39 +233,61 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   const pipeline = [
-    // Filter orders created in the last 30 days
+    // 1️⃣ Filter by updatedAt (last 30 days)
     {
       $match: {
-        createdAt: { $gte: thirtyDaysAgo },
+        updatedAt: { $gte: thirtyDaysAgo },
       },
     },
 
-    // Sort newest → oldest
+    // 2️⃣ Sort newest → oldest (by updatedAt)
     {
       $sort: {
-        createdAt: -1,
+        updatedAt: -1,
         _id: -1,
       },
     },
 
-    // Pagination
+    // 3️⃣ Pagination + count
     {
       $facet: {
-        data: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+        data: [
+          { $skip: (page - 1) * limit },
+          { $limit: limit },
+
+          // 4️⃣ SHAPE RESPONSE FOR FRONTEND (CRITICAL)
+          {
+            $project: {
+              _id: 1,
+              isActive: 1,
+              firstName: 1,
+              lastName: 1,
+              email: 1,
+              subscription: 1,
+              streetAddress: 1,
+
+              // 👇 map updatedAt to what frontend already uses
+              lastRenewAt: "$updatedAt",
+            },
+          },
+        ],
         meta: [{ $count: "total" }],
       },
     },
 
-    // Format output
+    // 5️⃣ Final format
     {
       $project: {
         data: 1,
-        total: { $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0] },
+        total: {
+          $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0],
+        },
       },
     },
   ];
 
   const [result] = await OrderModel.aggregate(pipeline);
+
   const data = result?.data || [];
   const total = result?.total || 0;
 
