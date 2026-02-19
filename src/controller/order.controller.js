@@ -109,11 +109,7 @@ const createOrder = asyncHandler(async (req, res) => {
     ? { normalizedAddress: normalizedAddress1, normalizedAddress2 }
     : { normalizedAddress: normalizedAddress1 };
   const existingOrder = await OrderModel.findOne(query);
-  console.log({
-    existingOrder,
-    date: Date.now() - existingOrder?.createdAt.getTime(),
-    thirtyDaysMs,
-  });
+
   if (
     existingOrder &&
     Date.now() - existingOrder.createdAt.getTime() <= thirtyDaysMs
@@ -149,27 +145,27 @@ const createOrder = asyncHandler(async (req, res) => {
   }
   console.log("Order created:", order._id);
   // Sheets
-  // try {
-  //   await appendOrderRow({
-  //     createdAt: order.createdAt,
-  //     firstName: order.firstName,
-  //     lastName: order.lastName,
-  //     streetAddress: order.streetAddress,
-  //     streetAddress2: order.streetAddress2 || "",
-  //     postCode: String(postCode).slice(0, 5),
-  //     email: order.email,
-  //     subscription: order.subscription,
-  //     productId: order.productId,
-  //     age: age || "",
-  //     gender: gender || "",
-  //     identity: identity || "",
-  //     household_size: household_size || "",
-  //     ethnicity: joinMulti(ethnicity),
-  //     household_language: joinMulti(household_language),
-  //   });
-  // } catch (e) {
-  //   console.error("Sheets append failed:", e);
-  // }
+  try {
+    await appendOrderRow({
+      createdAt: order.createdAt,
+      firstName: order.firstName,
+      lastName: order.lastName,
+      streetAddress: order.streetAddress,
+      streetAddress2: order.streetAddress2 || "",
+      postCode: String(postCode).slice(0, 5),
+      email: order.email,
+      subscription: order.subscription,
+      productId: order.productId,
+      age: age || "",
+      gender: gender || "",
+      identity: identity || "",
+      household_size: household_size || "",
+      ethnicity: joinMulti(ethnicity),
+      household_language: joinMulti(household_language),
+    });
+  } catch (e) {
+    console.error("Sheets append failed:", e);
+  }
 
   // SUCCESS LOG
   logSuccess({
