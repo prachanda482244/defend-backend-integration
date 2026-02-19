@@ -4,7 +4,7 @@ import axios from "axios";
 import { OrderModel } from "../model/orderModel.js";
 
 // ⚠ change to "0 0 * * *" in production
-cron.schedule("*/15 * * * * *", async () => {
+cron.schedule("0 0 * * *", async () => {
   const now = new Date();
   const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
   const thirtyDaysAgo = new Date(Date.now() - THIRTY_DAYS);
