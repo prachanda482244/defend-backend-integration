@@ -77,12 +77,20 @@ const createOrder = asyncHandler(async (req, res) => {
   // External US validation
   const oneLine = `${line1}, West Hollywood, CA ${String(postCode).slice(
     0,
-    5
+    5,
   )}`;
   const v = await validateUSAddress(oneLine);
   if (!v.ok) {
     logFailure({ reason: "Invalid address", request: req.body });
-    return res.status(200).json(new ApiResponse(400, null, "Invalid address"));
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          400,
+          null,
+          "The address must be located within West Hollywood, CA.",
+        ),
+      );
   }
 
   if (!isWestHollywoodOK(v.components)) {
@@ -314,7 +322,7 @@ const updateSubscription = asyncHandler(async (req, res) => {
   const order = await OrderModel.findByIdAndUpdate(
     orderId,
     { $set: { isActive, subscription } },
-    { new: true, runValidators: true }
+    { new: true, runValidators: true },
   );
 
   if (!order) throw new ApiError(404, "Order not found");
