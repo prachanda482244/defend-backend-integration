@@ -17,7 +17,6 @@ export async function validateUSAddress(oneLine) {
   if (!r.ok) return { ok: false, reason: "http_" + r.status };
 
   const data = await r.json();
-  console.log(data?.result);
   const match = data?.result?.addressMatches?.[0];
   if (!match) return { ok: false, reason: "not_found" };
 
