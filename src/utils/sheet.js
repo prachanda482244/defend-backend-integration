@@ -34,7 +34,7 @@ const sheets = google.sheets({ version: "v4", auth });
 async function ensureSheetExists() {
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
   const has = meta.data.sheets?.some(
-    (s) => s.properties?.title === SHEET_TITLE
+    (s) => s.properties?.title === SHEET_TITLE,
   );
   if (has) return;
 
@@ -75,6 +75,7 @@ async function ensureHeaderRow() {
           "Age",
           "Gender",
           "Identity",
+          "Identify as LGBTQ+?",
           "Household Size",
           "Ethnicity",
           "Household Language",
@@ -103,6 +104,7 @@ export async function appendOrderRow(o) {
       o.age || "",
       o.gender || "",
       o.identity || "",
+      o.identifyAsLGBTQ,
       o.household_size || "",
       o.ethnicity || "",
       o.household_language || "",

@@ -11,7 +11,8 @@ import { logSuccess, logFailure } from "../utils/logger.js";
 
 import { appendOrderRow } from "../utils/sheet.js";
 
-const joinMulti = (a) => (a && a.length ? a.join(", ") : "");
+const joinMulti = (a) =>
+  Array.isArray(a) && a.length ? a.join(", ") : a || "";
 import {
   validateAddressLine1,
   validateAddressLine2,
@@ -33,6 +34,7 @@ const createOrder = asyncHandler(async (req, res) => {
     household_size,
     ethnicity,
     household_language,
+    identifyAsLGBTQ,
   } = req.body;
 
   // Missing required fields
@@ -143,6 +145,7 @@ const createOrder = asyncHandler(async (req, res) => {
       .status(400)
       .json(new ApiResponse(400, null, "Failed to create an order"));
   }
+
   console.log("Order created:", order._id);
   // Sheets
   try {
@@ -159,6 +162,7 @@ const createOrder = asyncHandler(async (req, res) => {
       age: age || "",
       gender: gender || "",
       identity: identity || "",
+      identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
       household_size: household_size || "",
       ethnicity: joinMulti(ethnicity),
       household_language: joinMulti(household_language),
