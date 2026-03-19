@@ -35,6 +35,7 @@ const createOrder = asyncHandler(async (req, res) => {
     ethnicity,
     household_language,
     identifyAsLGBTQ,
+    wehoHearAboutUs,
   } = req.body;
 
   // Missing required fields
@@ -162,6 +163,7 @@ const createOrder = asyncHandler(async (req, res) => {
       age: age || "",
       gender: gender || "",
       identity: identity || "",
+      wehoHearAboutUs: wehoHearAboutUs || "Instagram",
       identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
       household_size: household_size || "",
       ethnicity: joinMulti(ethnicity),
