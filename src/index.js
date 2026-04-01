@@ -7,6 +7,8 @@ import reportRouter from "./routes/reportRouter.route.js";
 import chartRouter from "./routes/chart.route.js";
 import adminRouter from "./routes/admin.route.js";
 import orderRouter from "./routes/order.route.js";
+import errorRouter from "./routes/error.route.js";
+import { errorMiddleware } from "./middleware/error.middleware.js";
 import "./utils/cron.js";
 const app = express();
 connectToDb();
@@ -19,10 +21,14 @@ app.use(express.json({ limit: "20mb" }));
 app.use(urlencoded({ extended: true, limit: "20mb" }));
 app.use(express.static("public"));
 
+// Error handling middleware
+app.use(errorMiddleware);
+
 app.use("/api/v1/report", reportRouter);
 app.use("/api/v1/chart", chartRouter);
 app.use("/api/v1/admin", adminRouter);
 app.use("/api/v1/order", orderRouter);
+app.use("/api/v1/error", errorRouter);
 
 app.get("/testing", (_, res) => {
   res.status(200).json({

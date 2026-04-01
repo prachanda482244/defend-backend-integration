@@ -1,4 +1,5 @@
 import { OrderModel } from "../model/orderModel.js";
+import { ErrorLogModel } from "../model/errorLog.js";
 import {
   areAddressLinesSame,
   isWestHollywoodOK,
@@ -8,16 +9,81 @@ import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { logSuccess, logFailure } from "../utils/logger.js";
-
 import { appendOrderRow } from "../utils/sheet.js";
-
-const joinMulti = (a) =>
-  Array.isArray(a) && a.length ? a.join(", ") : a || "";
 import {
   validateAddressLine1,
   validateAddressLine2,
 } from "../validators/address.js";
 import { normalizeLine2 } from "../utils/normalizeAddress.js";
+
+const joinMulti = (a) =>
+  Array.isArray(a) && a.length ? a.join(", ") : a || "";
+
+const redact = (value) => {
+  if (!value || typeof value !== "object") return value;
+
+  const cloned = JSON.parse(JSON.stringify(value));
+
+  if (cloned.accessToken) cloned.accessToken = "***redacted***";
+  if (cloned.token) cloned.token = "***redacted***";
+  if (cloned.password) cloned.password = "***redacted***";
+  if (cloned.authorization) cloned.authorization = "***redacted***";
+  if (cloned.Authorization) cloned.Authorization = "***redacted***";
+  if (cloned["X-Shopify-Access-Token"]) {
+    cloned["X-Shopify-Access-Token"] = "***redacted***";
+  }
+
+  return cloned;
+};
+
+const saveErrorLog = async (payload = {}) => {
+  try {
+    await ErrorLogModel.create({
+      source: payload?.source || "orders-backend",
+      module: payload?.module || "",
+      stage: payload?.stage || "",
+      level: payload?.level || "error",
+      message: payload?.message || "Unknown error",
+      errorName: payload?.errorName || "",
+      statusCode: payload?.statusCode ?? null,
+      stack: payload?.stack || "",
+      request: payload?.request
+        ? {
+            ...payload.request,
+            headers: redact(payload.request.headers || {}),
+            body: redact(payload.request.body),
+            params: redact(payload.request.params || {}),
+            query: redact(payload.request.query || {}),
+          }
+        : {},
+      response: payload?.response
+        ? {
+            ...payload.response,
+            headers: redact(payload.response.headers || {}),
+            data: redact(payload.response.data),
+          }
+        : {},
+      context: payload?.context || {},
+      externalService: payload?.externalService || {},
+      meta: redact(payload?.meta),
+      resolved: false,
+    });
+  } catch (error) {
+    console.error("Failed to save error log:", error?.message || error);
+  }
+};
+
+const buildReqInfo = (req) => ({
+  method: req?.method || "",
+  url: req?.originalUrl || "",
+  ip: req?.ip || "",
+  userAgent: req?.get?.("user-agent") || "",
+  headers: req?.headers || {},
+  body: req?.body || {},
+  params: req?.params || {},
+  query: req?.query || {},
+});
+
 const createOrder = asyncHandler(async (req, res) => {
   const {
     firstName,
@@ -36,9 +102,9 @@ const createOrder = asyncHandler(async (req, res) => {
     household_language,
     identifyAsLGBTQ,
     wehoHearAboutUs,
-  } = req.body;
+    flag = "defentWeho",
+  } = req?.body || {};
 
-  // Missing required fields
   if (
     !firstName ||
     !lastName ||
@@ -48,81 +114,174 @@ const createOrder = asyncHandler(async (req, res) => {
     !productId ||
     !subscription
   ) {
-    logFailure({ reason: "Missing required field", request: req.body });
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Missing required field"));
+    const msg = "Missing required field";
+    logFailure({ reason: msg, request: req?.body });
+
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "validation",
+      level: "warning",
+      message: msg,
+      statusCode: 400,
+      request: buildReqInfo(req),
+      context: {
+        email: email || "",
+        productId: productId || "",
+        subscription: subscription || "",
+        flag: flag || "",
+      },
+    });
+
+    return res.status(400).json(new ApiResponse(400, null, msg));
   }
 
-  // Line 1 validate
   const v1 = validateAddressLine1(_line1);
-  if (!v1.ok) {
-    logFailure({ reason: v1.error, request: req.body });
-    return res.status(200).json(new ApiResponse(400, null, v1.error));
-  }
-  const line1 = v1.value;
+  if (!v1?.ok) {
+    const msg = v1?.error || "Invalid address line 1";
+    logFailure({ reason: msg, request: req?.body });
 
-  // Line 2 validate
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "address_line1_validation",
+      level: "warning",
+      message: msg,
+      statusCode: 400,
+      request: buildReqInfo(req),
+      context: { email, productId, subscription, flag },
+      meta: { streetAddress: _line1 },
+    });
+
+    return res.status(200).json(new ApiResponse(400, null, msg));
+  }
+  const line1 = v1?.value;
+
   const v2 = validateAddressLine2(_line2);
-  if (!v2.ok) {
-    logFailure({ reason: v2.error, request: req.body });
-    return res.status(200).json(new ApiResponse(400, null, v2.error));
-  }
-  const line2 = v2.value;
+  if (!v2?.ok) {
+    const msg = v2?.error || "Invalid address line 2";
+    logFailure({ reason: msg, request: req?.body });
 
-  // Validate address lines are not same
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "address_line2_validation",
+      level: "warning",
+      message: msg,
+      statusCode: 400,
+      request: buildReqInfo(req),
+      context: { email, productId, subscription, flag },
+      meta: { streetAddress2: _line2 },
+    });
+
+    return res.status(200).json(new ApiResponse(400, null, msg));
+  }
+  const line2 = v2?.value;
+
   if (line2 && areAddressLinesSame(line1, line2)) {
     const msg = "Address line 1 and line 2 cannot be the same";
-    logFailure({ reason: msg, request: req.body });
+    logFailure({ reason: msg, request: req?.body });
+
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "address_compare",
+      level: "warning",
+      message: msg,
+      statusCode: 400,
+      request: buildReqInfo(req),
+      context: { email, productId, subscription, flag },
+      meta: { line1, line2 },
+    });
+
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
-  // External US validation
-  const oneLine = `${line1}, West Hollywood, CA ${String(postCode).slice(
-    0,
-    5,
-  )}`;
+  const oneLine = `${line1}, West Hollywood, CA ${String(postCode).slice(0, 5)}`;
   const v = await validateUSAddress(oneLine);
-  if (!v.ok) {
-    logFailure({ reason: "Invalid address", request: req.body });
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(
-          400,
-          null,
-          "The address must be located within West Hollywood, CA.",
-        ),
-      );
+
+  if (!v?.ok) {
+    const msg = "The address must be located within West Hollywood, CA.";
+    logFailure({ reason: "Invalid address", request: req?.body });
+
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "address_validation_api",
+      level: "warning",
+      message: msg,
+      statusCode: 400,
+      request: buildReqInfo(req),
+      context: { email, productId, subscription, flag },
+      externalService: {
+        name: "address-validator",
+        endpoint: "validateUSAddress",
+        method: "POST",
+      },
+      meta: {
+        inputAddress: oneLine,
+        validatorResponse: v || null,
+      },
+    });
+
+    return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
-  if (!isWestHollywoodOK(v.components)) {
+  if (!isWestHollywoodOK(v?.components)) {
     const msg =
       "Service area is West Hollywood, CA (ZIPs: 90038, 90046, 90048, 90069)";
-    logFailure({ reason: msg, request: req.body });
-    return res.status(200).json(new ApiResponse(200, msg));
+    logFailure({ reason: msg, request: req?.body });
+
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "service_area_check",
+      level: "warning",
+      message: msg,
+      statusCode: 400,
+      request: buildReqInfo(req),
+      context: { email, productId, subscription, flag },
+      meta: {
+        inputAddress: oneLine,
+        components: v?.components || null,
+      },
+    });
+
+    return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
-  const normalizedAddress1 = v.normalized;
+  const normalizedAddress1 = v?.normalized;
   const normalizedAddress2 = line2 ? normalizeLine2(line2) : "";
-
   const thirtyDaysMs = 30 * 86400000;
 
   const query = line2
     ? { normalizedAddress: normalizedAddress1, normalizedAddress2 }
     : { normalizedAddress: normalizedAddress1 };
+
   const existingOrder = await OrderModel.findOne(query);
 
   if (
     existingOrder &&
-    Date.now() - existingOrder.createdAt.getTime() <= thirtyDaysMs
+    Date.now() - existingOrder?.createdAt?.getTime?.() <= thirtyDaysMs
   ) {
     const msg = "Address already used";
-    logFailure({ reason: msg, request: req.body });
+    logFailure({ reason: msg, request: req?.body });
+
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "duplicate_address_check",
+      level: "warning",
+      message: msg,
+      statusCode: 400,
+      request: buildReqInfo(req),
+      context: {
+        email,
+        productId,
+        subscription,
+        flag,
+        orderId: existingOrder?._id?.toString?.() || "",
+        normalizedAddress: normalizedAddress1 || "",
+        normalizedAddress2: normalizedAddress2 || "",
+      },
+    });
+
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
-  // Create order
   const order = await OrderModel.create({
     firstName,
     lastName,
@@ -138,45 +297,86 @@ const createOrder = asyncHandler(async (req, res) => {
   });
 
   if (!order) {
+    const msg = "Failed to create an order";
     logFailure({
       reason: "Failed to create an order after validation",
-      request: req.body,
+      request: req?.body,
     });
-    return res
-      .status(400)
-      .json(new ApiResponse(400, null, "Failed to create an order"));
+
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "db_create",
+      level: "error",
+      message: msg,
+      statusCode: 400,
+      request: buildReqInfo(req),
+      context: {
+        email,
+        productId,
+        subscription,
+        flag,
+        normalizedAddress: normalizedAddress1 || "",
+        normalizedAddress2: normalizedAddress2 || "",
+      },
+    });
+
+    return res.status(400).json(new ApiResponse(400, null, msg));
   }
 
-  console.log("Order created:", order._id);
-  // Sheets
   try {
-    await appendOrderRow({
-      createdAt: order.createdAt,
-      firstName: order.firstName,
-      lastName: order.lastName,
-      streetAddress: order.streetAddress,
-      streetAddress2: order.streetAddress2 || "",
-      postCode: String(postCode).slice(0, 5),
-      email: order.email,
-      subscription: order.subscription,
-      productId: order.productId,
-      age: age || "",
-      gender: gender || "",
-      identity: identity || "",
-      wehoHearAboutUs: wehoHearAboutUs || "Instagram",
-      identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
-      household_size: household_size || "",
-      ethnicity: joinMulti(ethnicity),
-      household_language: joinMulti(household_language),
-    });
+    await appendOrderRow(
+      {
+        createdAt: order?.createdAt,
+        firstName: order?.firstName,
+        lastName: order?.lastName,
+        streetAddress: order?.streetAddress,
+        streetAddress2: order?.streetAddress2 || "",
+        postCode: String(postCode).slice(0, 5),
+        email: order?.email,
+        subscription: order?.subscription,
+        productId: order?.productId,
+        age: age || "",
+        gender: gender || "",
+        identity: identity || "",
+        wehoHearAboutUs: wehoHearAboutUs || "Instagram",
+        identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
+        household_size: household_size || "",
+        ethnicity: joinMulti(ethnicity),
+        household_language: joinMulti(household_language),
+      },
+      flag,
+    );
   } catch (e) {
     console.error("Sheets append failed:", e);
+
+    await saveErrorLog({
+      module: "createOrder",
+      stage: "sheet_append",
+      level: "error",
+      message: e?.message || "Sheets append failed",
+      errorName: e?.name || "",
+      stack: e?.stack || "",
+      request: buildReqInfo(req),
+      context: {
+        orderId: order?._id?.toString?.() || "",
+        email,
+        productId,
+        subscription,
+        flag,
+        normalizedAddress: normalizedAddress1 || "",
+        normalizedAddress2: normalizedAddress2 || "",
+      },
+      externalService: {
+        name: "google-sheets",
+        endpoint: "appendOrderRow",
+        method: "APPEND",
+      },
+    });
   }
 
-  // SUCCESS LOG
   logSuccess({
     message: "Order created successfully",
-    orderId: order._id,
+    orderId: order?._id,
     email,
     productId,
     timestamp: new Date(),
@@ -185,90 +385,30 @@ const createOrder = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, order, "Order created"));
 });
 
-// const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
-//   const page = Math.max(parseInt(req.query.page) || 1, 1);
-//   const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 200);
-
-//   const now = new Date();
-//   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-//   // monthly first, then one_time, then others; newest first inside groups
-//   const pipeline = [
-//     { $match: { createdAt: { $gte: thirtyDaysAgo } } },
-//     {
-//       $addFields: {
-//         _subWeight: {
-//           $switch: {
-//             branches: [
-//               { case: { $eq: ["$subscription", "monthly"] }, then: 0 },
-//               { case: { $eq: ["$subscription", "one_time"] }, then: 2 },
-//             ],
-//             default: 1,
-//           },
-//         },
-//       },
-//     },
-//     { $sort: { _subWeight: 1, createdAt: -1, _id: 1 } },
-//     {
-//       $facet: {
-//         data: [{ $skip: (page - 1) * limit }, { $limit: limit }],
-//         meta: [{ $count: "total" }],
-//       },
-//     },
-//     {
-//       $project: {
-//         data: 1,
-//         total: { $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0] },
-//       },
-//     },
-//   ];
-
-//   const [result] = await OrderModel.aggregate(pipeline);
-//   const data = result?.data || [];
-//   const total = result?.total || 0;
-
-//   return res.status(200).json({
-//     success: true,
-//     message: "Orders fetched successfully",
-//     data,
-//     page,
-//     limit,
-//     total,
-//     totalPages: Math.ceil(total / limit) || 1,
-//   });
-// });
-
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
-  const page = Math.max(parseInt(req.query.page) || 1, 1);
-  const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 200);
+  const page = Math.max(parseInt(req?.query?.page) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req?.query?.limit) || 25, 1), 200);
 
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   const pipeline = [
-    // 1️⃣ Filter by updatedAt (last 30 days)
     {
       $match: {
         updatedAt: { $gte: thirtyDaysAgo },
       },
     },
-
-    // 2️⃣ Sort newest → oldest (by updatedAt)
     {
       $sort: {
         updatedAt: -1,
         _id: -1,
       },
     },
-
-    // 3️⃣ Pagination + count
     {
       $facet: {
         data: [
           { $skip: (page - 1) * limit },
           { $limit: limit },
-
-          // 4️⃣ SHAPE RESPONSE FOR FRONTEND (CRITICAL)
           {
             $project: {
               _id: 1,
@@ -278,8 +418,6 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
               email: 1,
               subscription: 1,
               streetAddress: 1,
-
-              // 👇 map updatedAt to what frontend already uses
               lastRenewAt: "$updatedAt",
             },
           },
@@ -287,8 +425,6 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
         meta: [{ $count: "total" }],
       },
     },
-
-    // 5️⃣ Final format
     {
       $project: {
         data: 1,
@@ -301,27 +437,30 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
 
   const [result] = await OrderModel.aggregate(pipeline);
 
-  const data = result?.data || [];
-  const total = result?.total || 0;
-
-  return res.status(200).json({
-    success: true,
-    message: "Orders fetched successfully",
-    data,
-    page,
-    limit,
-    total,
-    totalPages: Math.ceil(total / limit) || 1,
-  });
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        data: result?.data || [],
+        page,
+        limit,
+        total: result?.total || 0,
+        totalPages: Math.ceil((result?.total || 0) / limit) || 1,
+      },
+      "Orders fetched successfully",
+    ),
+  );
 });
 
 const updateSubscription = asyncHandler(async (req, res) => {
-  const { orderId } = req.params;
-  const { isActive } = req.body;
+  const { orderId } = req?.params || {};
+  const { isActive } = req?.body || {};
 
   if (!orderId) throw new ApiError(400, "Order ID is required");
+  if (typeof isActive !== "boolean") {
+    throw new ApiError(400, "isActive must be boolean");
+  }
 
-  // Keep string field aligned for your reporting/filters
   const subscription = isActive ? "monthly" : "one_time";
 
   const order = await OrderModel.findByIdAndUpdate(

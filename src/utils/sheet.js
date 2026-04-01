@@ -1,15 +1,8 @@
-// sheet.js
 import { google } from "googleapis";
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const SHEET_TITLE = "Orders"; // tab name
+const DEFAULT_SHEET_TITLE = "Orders";
 
-// Load JSON creds from project root
-// const keyPath = path.resolve(process.cwd(), "credentials.json");
-// const creds = JSON.parse(fs.readFileSync(keyPath, "utf8"));
-
-// Auth WITHOUT deprecated options
-// Option A: GoogleAuth with credentials (clean, no warnings)
 const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
 creds.private_key = creds.private_key.replace(/\\n/g, "\n");
 
@@ -21,43 +14,52 @@ const auth = new google.auth.GoogleAuth({
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
-// Option B: JWT constructor (also valid, pick ONE)
-// const auth = new google.auth.JWT(
-//   creds.client_email,
-//   undefined,
-//   creds.private_key,
-//   ['https://www.googleapis.com/auth/spreadsheets']
-// );
-
 const sheets = google.sheets({ version: "v4", auth });
 
-async function ensureSheetExists() {
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-  const has = meta.data.sheets?.some(
-    (s) => s.properties?.title === SHEET_TITLE,
+function getSheetTitle(flag) {
+  if (flag === "defentLA") return "DefentLA";
+  return DEFAULT_SHEET_TITLE; // defentWeho -> Orders
+}
+
+async function ensureSheetExists(sheetTitle) {
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+  });
+
+  const hasSheet = meta.data.sheets?.some(
+    (s) => s.properties?.title === sheetTitle,
   );
-  if (has) return;
+
+  if (hasSheet) return;
 
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: SPREADSHEET_ID,
     requestBody: {
-      requests: [{ addSheet: { properties: { title: SHEET_TITLE } } }],
+      requests: [
+        {
+          addSheet: {
+            properties: { title: sheetTitle },
+          },
+        },
+      ],
     },
   });
 }
 
-async function ensureHeaderRow() {
-  // Writes header only if A1 is empty
+async function ensureHeaderRow(sheetTitle) {
   const read = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_TITLE}!A1:A1`,
+    range: `${sheetTitle}!A1:A1`,
   });
-  const hasHeader = Array.isArray(read.data.values) && read.data.values.length;
+
+  const hasHeader =
+    Array.isArray(read.data.values) && read.data.values.length > 0;
+
   if (hasHeader) return;
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_TITLE}!A1`,
+    range: `${sheetTitle}!A1`,
     valueInputOption: "RAW",
     requestBody: {
       values: [
@@ -86,9 +88,11 @@ async function ensureHeaderRow() {
   });
 }
 
-export async function appendOrderRow(o) {
-  await ensureSheetExists();
-  await ensureHeaderRow();
+export async function appendOrderRow(o, flag) {
+  const sheetTitle = getSheetTitle(flag);
+
+  await ensureSheetExists(sheetTitle);
+  await ensureHeaderRow(sheetTitle);
 
   const values = [
     [
@@ -106,20 +110,20 @@ export async function appendOrderRow(o) {
       o.gender || "",
       o.identity || "",
       o.wehoHearAboutUs || "",
-      o.identifyAsLGBTQ,
+      o.identifyAsLGBTQ || "",
       o.household_size || "",
       o.ethnicity || "",
       o.household_language || "",
     ],
   ];
 
-  // Using range = sheet title is valid and avoids A1 parsing issues
   const resp = await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: SHEET_TITLE, // instead of 'Orders!A1'
+    range: sheetTitle,
     valueInputOption: "RAW",
     insertDataOption: "INSERT_ROWS",
     requestBody: { values },
   });
+
   return resp.data.updates?.updatedRange || null;
 }
