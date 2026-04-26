@@ -323,29 +323,36 @@ const createOrder = asyncHandler(async (req, res) => {
     return res.status(400).json(new ApiResponse(400, null, msg));
   }
 
+  const basePayload = {
+    createdAt: order?.createdAt,
+    firstName: order?.firstName,
+    lastName: order?.lastName,
+    streetAddress: order?.streetAddress,
+    streetAddress2: order?.streetAddress2 || "",
+    postCode: String(postCode).slice(0, 5),
+    email: order?.email,
+    subscription: order?.subscription,
+    productId: order?.productId,
+    age: age || "",
+    wehoHearAboutUs: wehoHearAboutUs || "Instagram",
+    household_size: household_size || "",
+    ethnicity: joinMulti(ethnicity),
+    household_language: joinMulti(household_language),
+  };
+  let sheetPayload;
+
+  if (flag === "defentLA") {
+    sheetPayload = basePayload;
+  } else {
+    sheetPayload = {
+      ...basePayload,
+      gender: gender || "",
+      identity: identity || "",
+      identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
+    };
+  }
   try {
-    await appendOrderRow(
-      {
-        createdAt: order?.createdAt,
-        firstName: order?.firstName,
-        lastName: order?.lastName,
-        streetAddress: order?.streetAddress,
-        streetAddress2: order?.streetAddress2 || "",
-        postCode: String(postCode).slice(0, 5),
-        email: order?.email,
-        subscription: order?.subscription,
-        productId: order?.productId,
-        age: age || "",
-        gender: gender || "",
-        identity: identity || "",
-        wehoHearAboutUs: wehoHearAboutUs || "Instagram",
-        identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
-        household_size: household_size || "",
-        ethnicity: joinMulti(ethnicity),
-        household_language: joinMulti(household_language),
-      },
-      flag,
-    );
+    await appendOrderRow(sheetPayload, flag);
   } catch (e) {
     console.error("Sheets append failed:", e);
 
