@@ -1,51 +1,53 @@
 import { google } from "googleapis";
 
-/**
- * ================================
- * ENV VARIABLES REQUIRED
- * ================================
- *
- * GOOGLE_CREDENTIALS_WEHO
- * GOOGLE_CREDENTIALS_LA
- * SPREADSHEET_ID_WEHO
- * SPREADSHEET_ID_LA
- */
-
-// ---------- PARSE CREDS ----------
 function parseCreds(envKey) {
-  const creds = JSON.parse(process.env[envKey]);
-  creds.private_key = creds.private_key.replace(/\\n/g, "\n");
+  const raw = process.env[envKey];
+
+  if (!raw) {
+    throw new Error(`Missing env variable: ${envKey}`);
+  }
+
+  const creds = JSON.parse(raw);
+
+  if (!creds.client_email || !creds.private_key) {
+    throw new Error(`Invalid Google credentials in ${envKey}`);
+  }
 
   return {
     client_email: creds.client_email,
-    private_key: creds.private_key,
+    private_key: creds.private_key.replace(/\\n/g, "\n"),
   };
 }
 
-// ---------- CREATE CLIENT ----------
 function createSheetsClient(creds) {
-  const auth = new google.auth.GoogleAuth({
-    credentials: creds,
+  const auth = new google.auth.JWT({
+    email: creds.client_email,
+    key: creds.private_key,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
 
   return google.sheets({ version: "v4", auth });
 }
 
-// ---------- INIT BOTH CLIENTS ----------
 const wehoSheets = createSheetsClient(parseCreds("GOOGLE_CREDENTIALS_WEHO"));
-
 const laSheets = createSheetsClient(parseCreds("GOOGLE_CREDENTIALS_LA"));
 
-// ---------- SWITCH CLIENT ----------
 function getSheetConfig(flag) {
   if (flag === "defentLA") {
+    if (!process.env.SPREADSHEET_ID_LA) {
+      throw new Error("Missing env variable: SPREADSHEET_ID_LA");
+    }
+
     return {
       sheets: laSheets,
       spreadsheetId: process.env.SPREADSHEET_ID_LA,
-      sheetTitle: "Orders", // or "Defent LA" if you want
+      sheetTitle: "Orders",
       type: "LA",
     };
+  }
+
+  if (!process.env.SPREADSHEET_ID_WEHO) {
+    throw new Error("Missing env variable: SPREADSHEET_ID_WEHO");
   }
 
   return {
@@ -56,7 +58,6 @@ function getSheetConfig(flag) {
   };
 }
 
-// ---------- HEADERS ----------
 function getHeaders(type) {
   const base = [
     "Created ISO",
@@ -94,15 +95,18 @@ function getHeaders(type) {
   ];
 }
 
-// ---------- ROW BUILDER ----------
 function buildRow(o, type) {
+  const city = type === "LA" ? "Los Angeles" : "West Hollywood";
+
   const base = [
-    new Date(o.createdAt).toISOString(),
+    o.createdAt
+      ? new Date(o.createdAt).toISOString()
+      : new Date().toISOString(),
     o.firstName || "",
     o.lastName || "",
     o.streetAddress || "",
     o.streetAddress2 || "",
-    "West Hollywood",
+    city,
     o.postCode || "",
     o.email || "",
     o.subscription || "",
@@ -132,7 +136,6 @@ function buildRow(o, type) {
   ];
 }
 
-// ---------- ENSURE SHEET ----------
 async function ensureSheetExists(sheets, spreadsheetId, sheetTitle) {
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
 
@@ -156,11 +159,10 @@ async function ensureSheetExists(sheets, spreadsheetId, sheetTitle) {
   });
 }
 
-// ---------- ENSURE HEADER ----------
 async function ensureHeaderRow(sheets, spreadsheetId, sheetTitle, headers) {
   const read = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${sheetTitle}!A1:A1`,
+    range: `'${sheetTitle}'!A1:A1`,
   });
 
   const hasHeader =
@@ -170,7 +172,7 @@ async function ensureHeaderRow(sheets, spreadsheetId, sheetTitle, headers) {
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${sheetTitle}!A1`,
+    range: `'${sheetTitle}'!A1`,
     valueInputOption: "RAW",
     requestBody: {
       values: [headers],
@@ -178,7 +180,6 @@ async function ensureHeaderRow(sheets, spreadsheetId, sheetTitle, headers) {
   });
 }
 
-// ---------- MAIN FUNCTION ----------
 export async function appendOrderRow(o, flag) {
   const { sheets, spreadsheetId, sheetTitle, type } = getSheetConfig(flag);
 
@@ -190,7 +191,7 @@ export async function appendOrderRow(o, flag) {
 
   const resp = await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: sheetTitle,
+    range: `'${sheetTitle}'!A1`,
     valueInputOption: "RAW",
     insertDataOption: "INSERT_ROWS",
     requestBody: {

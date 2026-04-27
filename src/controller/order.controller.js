@@ -1,8 +1,10 @@
 import { OrderModel } from "../model/orderModel.js";
 import { ErrorLogModel } from "../model/errorLog.js";
+
 import {
   areAddressLinesSame,
   isWestHollywoodOK,
+  isLosAngelesOK,
   validateUSAddress,
 } from "../utils/addressValidation.js";
 import { ApiError } from "../utils/ApiErrors.js";
@@ -153,6 +155,7 @@ const createOrder = asyncHandler(async (req, res) => {
 
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
+
   const line1 = v1?.value;
 
   const v2 = validateAddressLine2(_line2);
@@ -173,6 +176,7 @@ const createOrder = asyncHandler(async (req, res) => {
 
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
+
   const line2 = v2?.value;
 
   if (line2 && areAddressLinesSame(line1, line2)) {
@@ -193,11 +197,17 @@ const createOrder = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
-  const oneLine = `${line1}, West Hollywood, CA ${String(postCode).slice(0, 5)}`;
+  const isLA = flag === "defentLA";
+  const city = isLA ? "Los Angeles" : "West Hollywood";
+
+  const oneLine = `${line1}, ${city}, CA ${String(postCode).slice(0, 5)}`;
   const v = await validateUSAddress(oneLine);
 
   if (!v?.ok) {
-    const msg = "The address must be located within West Hollywood, CA.";
+    const msg = isLA
+      ? "The address must be located within Los Angeles, CA."
+      : "The address must be located within West Hollywood, CA.";
+
     logFailure({ reason: "Invalid address", request: req?.body });
 
     await saveErrorLog({
@@ -222,9 +232,15 @@ const createOrder = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
-  if (!isWestHollywoodOK(v?.components)) {
-    const msg =
-      "Service area is West Hollywood, CA (ZIPs: 90038, 90046, 90048, 90069)";
+  const serviceAreaOK = isLA
+    ? isLosAngelesOK(v?.components)
+    : isWestHollywoodOK(v?.components);
+
+  if (!serviceAreaOK) {
+    const msg = isLA
+      ? "Service area is Los Angeles, CA."
+      : "Service area is West Hollywood, CA (ZIPs: 90038, 90046, 90048, 90069)";
+
     logFailure({ reason: msg, request: req?.body });
 
     await saveErrorLog({
@@ -339,6 +355,7 @@ const createOrder = asyncHandler(async (req, res) => {
     ethnicity: joinMulti(ethnicity),
     household_language: joinMulti(household_language),
   };
+
   let sheetPayload;
 
   if (flag === "defentLA") {
@@ -351,6 +368,7 @@ const createOrder = asyncHandler(async (req, res) => {
       identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
     };
   }
+
   try {
     await appendOrderRow(sheetPayload, flag);
   } catch (e) {
