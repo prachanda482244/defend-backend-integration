@@ -19,6 +19,11 @@
             "date": 1777266006458,
             "name": "logs\\orders-failure\\failure-2026-04-27.log",
             "hash": "b2e6b668cce8eaba9107b0f4cd1b5487bd0c864afb4889a4b2cc744af69ad314"
+        },
+        {
+            "date": 1777352434445,
+            "name": "logs\\orders-failure\\failure-2026-04-28.log",
+            "hash": "25edb0b37c612f83ab59204fbfcf6674e1d567547110f5d8cd6697c5f2282801"
         }
     ],
     "hashType": "sha256"
