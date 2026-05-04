@@ -49,7 +49,7 @@ cron.schedule("0 0 * * *", async () => {
 
       try {
         const response = await axios.post(
-          "https://defent-shopify-app-1.onrender.com/api/create-order/api/create-order",
+          "https://defent-shopify-app-1.onrender.com/api/create-order",
           {
             firstName: order.firstName,
             lastName: order.lastName,
@@ -73,7 +73,7 @@ cron.schedule("0 0 * * *", async () => {
       } catch (err) {
         console.error(
           "Renewal error:",
-          err.response?.status,
+          JSON.stringify(err) || err.response?.status,
           err.response?.data || err.message,
         );
         continue;
