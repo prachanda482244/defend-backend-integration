@@ -63,6 +63,40 @@ cron.schedule("0 0 * * *", async () => {
           { timeout: 15000 },
         );
 
+        try {
+          const sheetData = {
+            createdAt: now,
+            firstName: order.firstName,
+            lastName: order.lastName,
+            streetAddress: order.streetAddress,
+            streetAddress2: order.streetAddress2 || "",
+            postCode: String(order.postCode).slice(0, 5),
+            email: order.email,
+            subscription: "monthly",
+            productId: order.productId,
+            age: order.age || "",
+            wehoHearAboutUs: "Auto-renewal",
+            household_size: order.household_size || "",
+            ethnicity: Array.isArray(order.ethnicity)
+              ? order.ethnicity.join(", ")
+              : "",
+            household_language: Array.isArray(order.household_language)
+              ? order.household_language.join(", ")
+              : "",
+            gender: order.gender || "",
+            identity: order.identity || "",
+            identifyAsLGBTQ: order.identifyAsLGBTQ ? "Yes" : "No",
+          };
+
+          await appendOrderRow(sheetData, order?.flag || "defentWeho");
+          console.log(`✅ Sheet updated for: ${order.email}`);
+        } catch (sheetErr) {
+          console.error(
+            "Sheet append failed for renewal:",
+            order.email,
+            sheetErr.message,
+          );
+        }
         // HARD STOP
         if (response.status !== 200 || response.data?.success !== true) {
           console.error("Renewal blocked:", response.data);
