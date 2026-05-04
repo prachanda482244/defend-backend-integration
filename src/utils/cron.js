@@ -1,7 +1,7 @@
-// cron/recurring.js
 import cron from "node-cron";
 import axios from "axios";
 import { OrderModel } from "../model/orderModel.js";
+import { appendOrderRow } from "./sheet.js";
 
 // ⚠ change to "0 0 * * *" in production
 cron.schedule("0 0 * * *", async () => {
