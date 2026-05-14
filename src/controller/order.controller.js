@@ -23,9 +23,7 @@ const joinMulti = (a) =>
 
 const redact = (value) => {
   if (!value || typeof value !== "object") return value;
-
   const cloned = JSON.parse(JSON.stringify(value));
-
   if (cloned.accessToken) cloned.accessToken = "***redacted***";
   if (cloned.token) cloned.token = "***redacted***";
   if (cloned.password) cloned.password = "***redacted***";
@@ -34,7 +32,6 @@ const redact = (value) => {
   if (cloned["X-Shopify-Access-Token"]) {
     cloned["X-Shopify-Access-Token"] = "***redacted***";
   }
-
   return cloned;
 };
 
@@ -88,6 +85,7 @@ const buildReqInfo = (req) => ({
 
 const createOrder = asyncHandler(async (req, res) => {
   const {
+    orderId = "",
     firstName,
     lastName,
     streetAddress: _line1,
@@ -105,8 +103,10 @@ const createOrder = asyncHandler(async (req, res) => {
     identifyAsLGBTQ,
     wehoHearAboutUs,
     flag = "defentWeho",
+    isRenewal = false,
   } = req?.body || {};
 
+  // Common required field check
   if (
     !firstName ||
     !lastName ||
@@ -131,12 +131,132 @@ const createOrder = asyncHandler(async (req, res) => {
         productId: productId || "",
         subscription: subscription || "",
         flag: flag || "",
+        isRenewal,
       },
     });
 
     return res.status(400).json(new ApiResponse(400, null, msg));
   }
 
+  // ────────────────────────────────────────────────────────────
+  // RENEWAL PATH — bump lastRenewAt on existing order
+  // ────────────────────────────────────────────────────────────
+  if (isRenewal) {
+    if (!orderId) {
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "orderId required for renewal"));
+    }
+
+    const existing = await OrderModel.findById(orderId);
+
+    if (
+      !existing ||
+      !existing.isActive ||
+      existing.subscription !== "monthly"
+    ) {
+      const msg = "No active subscription found for renewal";
+      logFailure({ reason: msg, request: req?.body });
+
+      await saveErrorLog({
+        module: "createOrder",
+        stage: "renewal_lookup",
+        level: "warning",
+        message: msg,
+        statusCode: 404,
+        request: buildReqInfo(req),
+        context: { email, productId, subscription, flag, isRenewal: true },
+      });
+
+      return res.status(200).json(new ApiResponse(404, null, msg));
+    }
+
+    const now = new Date();
+    existing.lastRenewAt = now;
+    await existing.save();
+
+    // Append renewal row to Sheets too (so each cycle is logged)
+    const basePayload = {
+      createdAt: now,
+      firstName: existing.firstName,
+      lastName: existing.lastName,
+      streetAddress: existing.streetAddress,
+      streetAddress2: existing.streetAddress2 || "",
+      postCode: String(existing.postCode).slice(0, 5),
+      email: existing.email,
+      subscription: existing.subscription,
+      productId: existing.productId,
+      age: existing.demographics?.age || age || "",
+      wehoHearAboutUs:
+        existing.demographics?.wehoHearAboutUs ||
+        wehoHearAboutUs ||
+        "Instagram",
+      household_size:
+        existing.demographics?.household_size || household_size || "",
+      ethnicity: joinMulti(existing.demographics?.ethnicity || ethnicity),
+      household_language: joinMulti(
+        existing.demographics?.household_language || household_language,
+      ),
+    };
+
+    const sheetPayload =
+      flag === "defentLA"
+        ? basePayload
+        : {
+            ...basePayload,
+            gender: existing.demographics?.gender || gender || "",
+            identity: existing.demographics?.identity || identity || "",
+            identifyAsLGBTQ:
+              existing.demographics?.identifyAsLGBTQ || identifyAsLGBTQ
+                ? "Yes"
+                : "No",
+          };
+
+    try {
+      await appendOrderRow(sheetPayload, flag);
+    } catch (e) {
+      console.error("Sheets append failed (renewal):", e);
+
+      await saveErrorLog({
+        module: "createOrder",
+        stage: "sheet_append_renewal",
+        level: "error",
+        message: e?.message || "Sheets append failed on renewal",
+        errorName: e?.name || "",
+        stack: e?.stack || "",
+        request: buildReqInfo(req),
+        context: {
+          orderId: existing?._id?.toString?.() || "",
+          email,
+          productId,
+          subscription,
+          flag,
+          isRenewal: true,
+        },
+        externalService: {
+          name: "google-sheets",
+          endpoint: "appendOrderRow",
+          method: "APPEND",
+        },
+      });
+    }
+
+    logSuccess({
+      message: "Subscription renewed successfully",
+      orderId: existing._id,
+      email,
+      productId,
+      timestamp: now,
+    });
+
+    return res
+      .status(200)
+      .json(new ApiResponse(200, existing, "Subscription renewed"));
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // FIRST-TIME ORDER PATH — your existing flow, untouched
+  // ────────────────────────────────────────────────────────────
   const v1 = validateAddressLine1(_line1);
   if (!v1?.ok) {
     const msg = v1?.error || "Invalid address line 1";
@@ -310,6 +430,17 @@ const createOrder = asyncHandler(async (req, res) => {
     isActive: subscription !== "one_time",
     normalizedAddress: normalizedAddress1,
     normalizedAddress2: normalizedAddress2 || null,
+    source: flag === "defentLA" ? "Defent La" : "Defent Weho",
+    demographics: {
+      age: age || "",
+      gender: gender || "",
+      identity: identity || "",
+      household_size: household_size || "",
+      ethnicity: joinMulti(ethnicity),
+      household_language: joinMulti(household_language),
+      identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
+      wehoHearAboutUs: wehoHearAboutUs || "",
+    },
   });
 
   if (!order) {
@@ -357,7 +488,6 @@ const createOrder = asyncHandler(async (req, res) => {
   };
 
   let sheetPayload;
-
   if (flag === "defentLA") {
     sheetPayload = basePayload;
   } else {
@@ -418,17 +548,8 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   const pipeline = [
-    {
-      $match: {
-        updatedAt: { $gte: thirtyDaysAgo },
-      },
-    },
-    {
-      $sort: {
-        updatedAt: -1,
-        _id: -1,
-      },
-    },
+    { $match: { updatedAt: { $gte: thirtyDaysAgo } } },
+    { $sort: { updatedAt: -1, _id: -1 } },
     {
       $facet: {
         data: [
@@ -453,9 +574,7 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
     {
       $project: {
         data: 1,
-        total: {
-          $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0],
-        },
+        total: { $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0] },
       },
     },
   ];
