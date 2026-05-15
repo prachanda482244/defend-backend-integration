@@ -6,8 +6,8 @@ import { OrderModel } from "../model/orderModel.js";
 let isRunning = false;
 
 // ⚠ change to "0 0 * * *" in production
-cron.schedule("*/30 * * * * *", async () => {
-  // cron.schedule("0 0 * * *", async () => {
+// cron.schedule("*/30 * * * * *", async () => {
+cron.schedule("0 0 * * *", async () => {
   if (isRunning) return;
   isRunning = true;
 
@@ -44,7 +44,7 @@ cron.schedule("*/30 * * * * *", async () => {
 
       try {
         const response = await axios.post(
-          "https://ease-highs-mercy-advice.trycloudflare.com/api/create-order",
+          "https://defent-shopify-app-1.onrender.com/api/create-order",
           {
             orderId: order._id.toString(),
             firstName: order.firstName,
