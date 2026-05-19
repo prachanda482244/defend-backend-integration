@@ -547,20 +547,25 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  // Map query parameter to actual source value
-  let sourceFilterValue = null;
+  // Map query parameter to actual source values
+  let sourceFilterArray = null;
+  let filterDisplayValue = null;
+
   if (sourceFilterParam === "defentWeho") {
-    sourceFilterValue = "Defent Weho";
+    // Include both "Defent Weho" (new) AND "weho" (old)
+    sourceFilterArray = ["Defent Weho", "weho"];
+    filterDisplayValue = "Defent Weho";
   } else if (sourceFilterParam === "defentLa") {
-    sourceFilterValue = "Defent La";
+    sourceFilterArray = ["Defent La"];
+    filterDisplayValue = "Defent La";
   }
 
   // Build match conditions
   const matchConditions = { updatedAt: { $gte: thirtyDaysAgo } };
 
   // Add source filter if provided
-  if (sourceFilterValue) {
-    matchConditions.source = sourceFilterValue;
+  if (sourceFilterArray) {
+    matchConditions.source = { $in: sourceFilterArray };
   }
 
   const pipeline = [
@@ -633,8 +638,8 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
     };
 
     // Add filteredBy only if filter is applied
-    if (sourceFilterValue) {
-      responseData.filteredBy = sourceFilterValue;
+    if (filterDisplayValue) {
+      responseData.filteredBy = filterDisplayValue;
     }
 
     return res
@@ -643,8 +648,8 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
         new ApiResponse(
           200,
           responseData,
-          sourceFilterValue
-            ? `Orders fetched successfully for source: ${sourceFilterValue}`
+          filterDisplayValue
+            ? `Orders fetched successfully for source: ${filterDisplayValue}`
             : "Orders fetched successfully",
         ),
       );
