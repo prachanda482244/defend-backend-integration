@@ -552,7 +552,7 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   let filterDisplayValue = null;
 
   if (sourceFilterParam === "defentWeho") {
-    // Include both "Defent Weho" (new) AND "weho" (old)
+    // "weho" and "Defent Weho" are the SAME fucking thing
     sourceFilterArray = ["Defent Weho", "weho"];
     filterDisplayValue = "Defent Weho";
   } else if (sourceFilterParam === "defentLa") {
@@ -578,8 +578,13 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
           { $limit: limit },
           {
             $addFields: {
-              source: {
-                $ifNull: ["$source", "Defent Weho"],
+              // Normalize source for display - treat "weho" as "Defent Weho"
+              normalizedSource: {
+                $cond: {
+                  if: { $eq: ["$source", "weho"] },
+                  then: "Defent Weho",
+                  else: { $ifNull: ["$source", "Defent Weho"] },
+                },
               },
             },
           },
@@ -594,7 +599,8 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
               streetAddress: 1,
               streetAddress2: 1,
               postCode: 1,
-              source: 1,
+              source: 1, // Keep original source
+              normalizedSource: 1, // Add normalized version
               normalizedAddress: 1,
               normalizedAddress2: 1,
               lastRenewAt: "$updatedAt",
