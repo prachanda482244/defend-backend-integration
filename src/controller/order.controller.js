@@ -584,9 +584,9 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const total = result?.total || 0;
   const totalPages = Math.ceil(total / limit) || 1;
 
-  // Calculate nextPage and prevPage dynamically
-  const nextPage = page < totalPages ? page + 1 : null;
-  const prevPage = page > 1 ? page - 1 : null;
+  // Calculate nextPage and prevPage as boolean
+  const nextPage = page < totalPages;
+  const prevPage = page > 1;
 
   return res.status(200).json(
     new ApiResponse(
