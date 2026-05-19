@@ -560,13 +560,15 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
 
   const matchConditions = { updatedAt: { $gte: thirtyDaysAgo } };
 
-  if (sourceFilterArray) {
+  if (sourceFilterParam === "defentWeho") {
     matchConditions.$or = [
       { source: { $in: sourceFilterArray } },
       { source: { $exists: false } },
       { source: null },
       { source: "" },
     ];
+  } else if (sourceFilterParam === "defentLa") {
+    matchConditions.source = "Defent La";
   }
 
   const pipeline = [
@@ -582,11 +584,16 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
               normalizedSource: {
                 $cond: {
                   if: {
-                    $or: [
-                      { $eq: ["$source", "weho"] },
-                      { $eq: ["$source", null] },
-                      { $eq: ["$source", ""] },
-                      { $not: ["$source"] },
+                    $and: [
+                      { $ne: [sourceFilterParam, "defentLa"] },
+                      {
+                        $or: [
+                          { $eq: ["$source", "weho"] },
+                          { $eq: ["$source", null] },
+                          { $eq: ["$source", ""] },
+                          { $not: ["$source"] },
+                        ],
+                      },
                     ],
                   },
                   then: "Defent Weho",
