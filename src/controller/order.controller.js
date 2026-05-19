@@ -542,30 +542,31 @@ const createOrder = asyncHandler(async (req, res) => {
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req?.query?.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req?.query?.limit) || 25, 1), 200);
-  const sourceFilterParam = req?.query?.source; // "defentWeho" or "defentLa"
+  const sourceFilterParam = req?.query?.source;
 
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  // Map query parameter to actual source values
   let sourceFilterArray = null;
   let filterDisplayValue = null;
 
   if (sourceFilterParam === "defentWeho") {
-    // "weho" and "Defent Weho" are the SAME fucking thing
-    sourceFilterArray = ["Defent Weho", "weho"];
+    sourceFilterArray = ["Defent Weho", "weho", null, undefined, ""];
     filterDisplayValue = "Defent Weho";
   } else if (sourceFilterParam === "defentLa") {
     sourceFilterArray = ["Defent La"];
     filterDisplayValue = "Defent La";
   }
 
-  // Build match conditions
   const matchConditions = { updatedAt: { $gte: thirtyDaysAgo } };
 
-  // Add source filter if provided
   if (sourceFilterArray) {
-    matchConditions.source = { $in: sourceFilterArray };
+    matchConditions.$or = [
+      { source: { $in: sourceFilterArray } },
+      { source: { $exists: false } },
+      { source: null },
+      { source: "" },
+    ];
   }
 
   const pipeline = [
@@ -578,10 +579,16 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
           { $limit: limit },
           {
             $addFields: {
-              // Normalize source for display - treat "weho" as "Defent Weho"
               normalizedSource: {
                 $cond: {
-                  if: { $eq: ["$source", "weho"] },
+                  if: {
+                    $or: [
+                      { $eq: ["$source", "weho"] },
+                      { $eq: ["$source", null] },
+                      { $eq: ["$source", ""] },
+                      { $not: ["$source"] },
+                    ],
+                  },
                   then: "Defent Weho",
                   else: { $ifNull: ["$source", "Defent Weho"] },
                 },
@@ -599,8 +606,8 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
               streetAddress: 1,
               streetAddress2: 1,
               postCode: 1,
-              source: 1, // Keep original source
-              normalizedSource: 1, // Add normalized version
+              source: 1,
+              normalizedSource: 1,
               normalizedAddress: 1,
               normalizedAddress2: 1,
               lastRenewAt: "$updatedAt",
@@ -629,7 +636,6 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
     const total = result?.total || 0;
     const totalPages = Math.ceil(total / limit) || 1;
 
-    // Calculate nextPage and prevPage as boolean
     const nextPage = page < totalPages;
     const prevPage = page > 1;
 
@@ -643,7 +649,6 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
       prevPage,
     };
 
-    // Add filteredBy only if filter is applied
     if (filterDisplayValue) {
       responseData.filteredBy = filterDisplayValue;
     }
@@ -701,5 +706,182 @@ const updateSubscription = asyncHandler(async (req, res) => {
     .status(200)
     .json(new ApiResponse(200, order, "Subscription updated"));
 });
+const removeDuplicateOrders = asyncHandler(async (req, res) => {
+  try {
+    const pipeline = [
+      {
+        $match: {
+          isActive: true,
+          subscription: "monthly",
+        },
+      },
+      {
+        $sort: { createdAt: -1 },
+      },
+      {
+        $group: {
+          _id: "$email",
+          documents: { $push: "$$ROOT" },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+    ];
 
-export { createOrder, getAll30DaysAgoOrder, updateSubscription };
+    const duplicates = await OrderModel.aggregate(pipeline);
+
+    let deletedCount = 0;
+
+    for (const duplicate of duplicates) {
+      const docs = duplicate.documents;
+      const latestDoc = docs[0];
+      const olderDocs = docs.slice(1);
+
+      for (const oldDoc of olderDocs) {
+        await OrderModel.deleteOne({ _id: oldDoc._id });
+        deletedCount++;
+        console.log(
+          `Deleted duplicate order for ${duplicate._id} with ID: ${oldDoc._id} (created: ${oldDoc.createdAt})`,
+        );
+      }
+    }
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          deletedCount,
+          message: `Removed ${deletedCount} duplicate orders`,
+        },
+        "Duplicate orders removed successfully",
+      ),
+    );
+  } catch (error) {
+    console.error("Error removing duplicates:", error);
+    return res
+      .status(500)
+      .json(
+        new ApiResponse(
+          500,
+          null,
+          `Error removing duplicates: ${error.message}`,
+        ),
+      );
+  }
+});
+const getDuplicateOrders = asyncHandler(async (req, res) => {
+  try {
+    const pipeline = [
+      {
+        $match: {
+          isActive: true,
+          subscription: "monthly",
+        },
+      },
+      {
+        $sort: { createdAt: -1 },
+      },
+      {
+        $group: {
+          _id: "$email",
+          documents: { $push: "$$ROOT" },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+      {
+        $project: {
+          email: "$_id",
+          duplicateCount: "$count",
+          orders: {
+            $map: {
+              input: "$documents",
+              as: "doc",
+              in: {
+                _id: "$$doc._id",
+                firstName: "$$doc.firstName",
+                lastName: "$$doc.lastName",
+                createdAt: "$$doc.createdAt",
+                updatedAt: "$$doc.updatedAt",
+                isActive: "$$doc.isActive",
+                subscription: "$$doc.subscription",
+                source: "$$doc.source",
+                streetAddress: "$$doc.streetAddress",
+                postCode: "$$doc.postCode",
+              },
+            },
+          },
+          keepOrder: {
+            $arrayElemAt: ["$documents", 0],
+          },
+          deleteOrders: {
+            $slice: ["$documents", 1, { $size: "$documents" }],
+          },
+        },
+      },
+      {
+        $project: {
+          email: 1,
+          duplicateCount: 1,
+          orders: 1,
+          keepOrderId: "$keepOrder._id",
+          keepOrderCreatedAt: "$keepOrder.createdAt",
+          deleteOrderIds: {
+            $map: {
+              input: "$deleteOrders",
+              as: "order",
+              in: "$$order._id",
+            },
+          },
+        },
+      },
+    ];
+
+    const duplicates = await OrderModel.aggregate(pipeline);
+
+    const totalDuplicates = duplicates.reduce(
+      (sum, dup) => sum + (dup.duplicateCount - 1),
+      0,
+    );
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          totalDuplicateGroups: duplicates.length,
+          totalDuplicateOrders: totalDuplicates,
+          duplicates: duplicates,
+        },
+        duplicates.length > 0
+          ? `Found ${duplicates.length} customers with duplicate orders (${totalDuplicates} duplicate records)`
+          : "No duplicate orders found",
+      ),
+    );
+  } catch (error) {
+    console.error("Error checking duplicates:", error);
+    return res
+      .status(500)
+      .json(
+        new ApiResponse(
+          500,
+          null,
+          `Error checking duplicates: ${error.message}`,
+        ),
+      );
+  }
+});
+export {
+  createOrder,
+  getAll30DaysAgoOrder,
+  updateSubscription,
+  removeDuplicateOrders,
+  getDuplicateOrders,
+};
