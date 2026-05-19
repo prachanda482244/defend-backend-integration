@@ -542,12 +542,21 @@ const createOrder = asyncHandler(async (req, res) => {
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req?.query?.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req?.query?.limit) || 25, 1), 200);
+  const sourceFilter = req?.query?.source; // "Defent Weho", "Defent La", or undefined
 
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
+  // Build match conditions
+  const matchConditions = { updatedAt: { $gte: thirtyDaysAgo } };
+
+  // Add source filter if provided
+  if (sourceFilter) {
+    matchConditions.source = sourceFilter;
+  }
+
   const pipeline = [
-    { $match: { updatedAt: { $gte: thirtyDaysAgo } } },
+    { $match: matchConditions },
     { $sort: { updatedAt: -1, _id: -1 } },
     {
       $facet: {
@@ -616,8 +625,11 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
           totalPages,
           nextPage,
           prevPage,
+          ...(sourceFilter && { filteredBy: sourceFilter }), // Optional: show what filter was applied
         },
-        "Orders fetched successfully",
+        sourceFilter
+          ? `Orders fetched successfully for source: ${sourceFilter}`
+          : "Orders fetched successfully",
       ),
     );
   } catch (error) {
