@@ -581,6 +581,13 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
 
   const [result] = await OrderModel.aggregate(pipeline);
 
+  const total = result?.total || 0;
+  const totalPages = Math.ceil(total / limit) || 1;
+
+  // Calculate nextPage and prevPage dynamically
+  const nextPage = page < totalPages ? page + 1 : null;
+  const prevPage = page > 1 ? page - 1 : null;
+
   return res.status(200).json(
     new ApiResponse(
       200,
@@ -588,8 +595,10 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
         data: result?.data || [],
         page,
         limit,
-        total: result?.total || 0,
-        totalPages: Math.ceil((result?.total || 0) / limit) || 1,
+        total,
+        totalPages,
+        nextPage,
+        prevPage,
       },
       "Orders fetched successfully",
     ),
