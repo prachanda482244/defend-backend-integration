@@ -539,7 +539,6 @@ const createOrder = asyncHandler(async (req, res) => {
 
   return res.status(200).json(new ApiResponse(200, order, "Order created"));
 });
-
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req?.query?.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req?.query?.limit) || 25, 1), 200);
@@ -556,6 +555,13 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
           { $skip: (page - 1) * limit },
           { $limit: limit },
           {
+            $addFields: {
+              source: {
+                $ifNull: ["$source", "Weho"],
+              },
+            },
+          },
+          {
             $project: {
               _id: 1,
               isActive: 1,
@@ -564,7 +570,17 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
               email: 1,
               subscription: 1,
               streetAddress: 1,
+              streetAddress2: 1,
+              postCode: 1,
+              source: 1,
+              normalizedAddress: 1,
+              normalizedAddress2: 1,
               lastRenewAt: "$updatedAt",
+              flag: 1,
+              demographics: 1,
+              createdAt: 1,
+              updatedAt: 1,
+              productId: 1,
             },
           },
         ],
@@ -579,32 +595,50 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
     },
   ];
 
-  const [result] = await OrderModel.aggregate(pipeline);
+  try {
+    const [result] = await OrderModel.aggregate(pipeline);
 
-  const total = result?.total || 0;
-  const totalPages = Math.ceil(total / limit) || 1;
+    const total = result?.total || 0;
+    const totalPages = Math.ceil(total / limit) || 1;
 
-  // Calculate nextPage and prevPage as boolean
-  const nextPage = page < totalPages;
-  const prevPage = page > 1;
+    // Calculate nextPage and prevPage as boolean
+    const nextPage = page < totalPages;
+    const prevPage = page > 1;
 
-  return res.status(200).json(
-    new ApiResponse(
-      200,
-      {
-        data: result?.data || [],
-        page,
-        limit,
-        total,
-        totalPages,
-        nextPage,
-        prevPage,
-      },
-      "Orders fetched successfully",
-    ),
-  );
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          data: result?.data || [],
+          page,
+          limit,
+          total,
+          totalPages,
+          nextPage,
+          prevPage,
+        },
+        "Orders fetched successfully",
+      ),
+    );
+  } catch (error) {
+    console.error("Error fetching orders:", error);
+    return res.status(500).json(
+      new ApiResponse(
+        500,
+        {
+          data: [],
+          page,
+          limit,
+          total: 0,
+          totalPages: 1,
+          nextPage: false,
+          prevPage: false,
+        },
+        `Error fetching orders: ${error.message}`,
+      ),
+    );
+  }
 });
-
 const updateSubscription = asyncHandler(async (req, res) => {
   const { orderId } = req?.params || {};
   const { isActive } = req?.body || {};
