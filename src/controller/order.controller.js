@@ -542,17 +542,25 @@ const createOrder = asyncHandler(async (req, res) => {
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req?.query?.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req?.query?.limit) || 25, 1), 200);
-  const sourceFilter = req?.query?.source; // "Defent Weho", "Defent La", or undefined
+  const sourceFilterParam = req?.query?.source; // "defentWeho" or "defentLa"
 
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  // Map query parameter to actual source value
+  let sourceFilterValue = null;
+  if (sourceFilterParam === "defentWeho") {
+    sourceFilterValue = "Defent Weho";
+  } else if (sourceFilterParam === "defentLa") {
+    sourceFilterValue = "Defent La";
+  }
 
   // Build match conditions
   const matchConditions = { updatedAt: { $gte: thirtyDaysAgo } };
 
   // Add source filter if provided
-  if (sourceFilter) {
-    matchConditions.source = sourceFilter;
+  if (sourceFilterValue) {
+    matchConditions.source = sourceFilterValue;
   }
 
   const pipeline = [
@@ -614,24 +622,32 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
     const nextPage = page < totalPages;
     const prevPage = page > 1;
 
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        {
-          data: result?.data || [],
-          page,
-          limit,
-          total,
-          totalPages,
-          nextPage,
-          prevPage,
-          ...(sourceFilter && { filteredBy: sourceFilter }), // Optional: show what filter was applied
-        },
-        sourceFilter
-          ? `Orders fetched successfully for source: ${sourceFilter}`
-          : "Orders fetched successfully",
-      ),
-    );
+    const responseData = {
+      data: result?.data || [],
+      page,
+      limit,
+      total,
+      totalPages,
+      nextPage,
+      prevPage,
+    };
+
+    // Add filteredBy only if filter is applied
+    if (sourceFilterValue) {
+      responseData.filteredBy = sourceFilterValue;
+    }
+
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          responseData,
+          sourceFilterValue
+            ? `Orders fetched successfully for source: ${sourceFilterValue}`
+            : "Orders fetched successfully",
+        ),
+      );
   } catch (error) {
     console.error("Error fetching orders:", error);
     return res.status(500).json(
