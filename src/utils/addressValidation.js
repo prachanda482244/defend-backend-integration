@@ -82,7 +82,22 @@ export async function validateUSAddress(oneLine) {
     format: "json",
   });
 
-  const r = await fetch(url, { timeout: 8000 });
+  // Native fetch ignores { timeout }, so use AbortController for a real timeout.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+
+  let r;
+  try {
+    r = await fetch(url, { signal: ctrl.signal });
+  } catch (e) {
+    return {
+      ok: false,
+      reason: e?.name === "AbortError" ? "timeout" : "network_error",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
   if (!r.ok) return { ok: false, reason: "http_" + r.status };
 
   const data = await r.json();
@@ -103,23 +118,86 @@ export async function validateUSAddress(oneLine) {
   };
 }
 
-// Optional gate for West Hollywood + ZIPs
+/**
+ * Wraps validateUSAddress. The Census geocoder frequently returns `not_found`
+ * for real, deliverable addresses (TIGER coverage gaps). Rather than rejecting
+ * those outright, we fall back to a ZIP-based acceptance using the caller's
+ * postCode and flag, building a synthetic "ok" result from the input.
+ *
+ * @param {string} oneLine  e.g. "8500 Santa Monica Blvd, West Hollywood, CA 90069"
+ * @param {object} opts
+ * @param {string} opts.postCode  raw postCode from the request
+ * @param {boolean} opts.isLA     true when flag === "defentLA"
+ * @param {string} opts.city      city string used to build oneLine
+ */
+// Looks like a real US street line: leading house number + a street-type word.
+function looksLikeStreetAddress(line1) {
+  const s = String(line1 || "")
+    .trim()
+    .toLowerCase();
+  const hasHouseNumber = /^\d+\s+\S+/.test(s);
+  const hasStreetType =
+    /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|ter|terrace|cir|circle|hwy|highway|pkwy|parkway)\b/.test(
+      s,
+    );
+  return hasHouseNumber && hasStreetType;
+}
+
+export async function validateAddressWithZipFallback(
+  oneLine,
+  { postCode, isLA, city, line1 }, // pass line1 in from the controller
+) {
+  const v = await validateUSAddress(oneLine);
+  if (v.ok) return v;
+
+  const recoverable = v.reason === "not_found" || v.reason === "timeout";
+  if (!recoverable) return v;
+
+  // Don't fall back for input that isn't even shaped like a street address.
+  if (!looksLikeStreetAddress(line1)) return v;
+
+  const zip5 = String(postCode || "").slice(0, 5);
+  const zipInArea = isLA ? LA_ZIPS.has(zip5) : ALLOWED_ZIPS.has(zip5);
+  if (!zipInArea) return v;
+
+  return {
+    ok: true,
+    fallback: true,
+    normalized: oneLine.toUpperCase(),
+    components: {
+      city: city || (isLA ? "Los Angeles" : "West Hollywood"),
+      state: "CA",
+      zip5,
+    },
+    coordinates: null,
+  };
+}
+
+// Service-area gate. Trusts state + ZIP because the Census geocoder
+// frequently mislabels West Hollywood addresses as "Los Angeles".
 export function isWestHollywoodOK(components) {
-  const cityOK = (components.city || "").toLowerCase() === "west hollywood";
   const stateOK = (components.state || "").toUpperCase() === "CA";
   const zipOK = ALLOWED_ZIPS.has(components.zip5 || "");
-  return cityOK && stateOK && zipOK;
+  return stateOK && zipOK;
 }
 
 export function isLosAngelesOK(components) {
-  const cityOK = (components.city || "").toLowerCase() === "los angeles";
-
   const stateOK = (components.state || "").toUpperCase() === "CA";
-
   const zipOK = LA_ZIPS.has(components.zip5 || "");
-
-  return cityOK && stateOK && zipOK;
+  return stateOK && zipOK;
 }
+
+// Strict variants kept available if you ever want exact-city enforcement.
+export function isWestHollywoodStrict(components) {
+  const cityOK = (components.city || "").toLowerCase() === "west hollywood";
+  return cityOK && isWestHollywoodOK(components);
+}
+
+export function isLosAngelesStrict(components) {
+  const cityOK = (components.city || "").toLowerCase() === "los angeles";
+  return cityOK && isLosAngelesOK(components);
+}
+
 // More strict version that catches addresses that are too similar
 export function areAddressLinesSame(line1, line2) {
   if (!line2) return false;

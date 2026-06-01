@@ -6,6 +6,7 @@ import {
   isWestHollywoodOK,
   isLosAngelesOK,
   validateUSAddress,
+  validateAddressWithZipFallback,
 } from "../utils/addressValidation.js";
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -298,7 +299,6 @@ const createOrder = asyncHandler(async (req, res) => {
   }
 
   const line2 = v2?.value;
-
   if (line2 && areAddressLinesSame(line1, line2)) {
     const msg = "Address line 1 and line 2 cannot be the same";
     logFailure({ reason: msg, request: req?.body });
@@ -321,7 +321,12 @@ const createOrder = asyncHandler(async (req, res) => {
   const city = isLA ? "Los Angeles" : "West Hollywood";
 
   const oneLine = `${line1}, ${city}, CA ${String(postCode).slice(0, 5)}`;
-  const v = await validateUSAddress(oneLine);
+  const v = await validateAddressWithZipFallback(oneLine, {
+    postCode,
+    isLA,
+    city,
+    line1,
+  });
 
   if (!v?.ok) {
     const msg = isLA

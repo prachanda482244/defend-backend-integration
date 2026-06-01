@@ -30,15 +30,14 @@ app.use("/api/v1/admin", adminRouter);
 app.use("/api/v1/order", orderRouter);
 app.use("/api/v1/error", errorRouter);
 
-app.get("/testing", (_, res) => {
+app.get("/api/v1/health", (_, res) => {
   res.status(200).json({
     success: true,
     data: [
       {
-        name: "Something",
+        name: "Health Check",
       },
     ],
-    message: "Data fetched",
   });
 });
 app.listen(PORT, () => {
