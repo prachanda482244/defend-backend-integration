@@ -172,6 +172,22 @@ const createOrder = asyncHandler(async (req, res) => {
       return res.status(200).json(new ApiResponse(404, null, msg));
     }
 
+    const lastRenew =
+      existing.lastRenewAt?.getTime?.() ?? existing.createdAt?.getTime?.() ?? 0;
+    const THIRTY_DAYS = 30 * 86400000;
+    if (Date.now() - lastRenew < THIRTY_DAYS) {
+      const msg = "Renewal not due yet";
+      await saveErrorLog({
+        module: "createOrder",
+        stage: "renewal_duplicate_guard",
+        level: "warning",
+        message: msg,
+        statusCode: 409,
+        request: buildReqInfo(req),
+        context: { orderId, email, productId, flag, isRenewal: true },
+      });
+      return res.status(200).json(new ApiResponse(409, null, msg));
+    }
     const now = new Date();
     existing.lastRenewAt = now;
     await existing.save();
