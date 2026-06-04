@@ -400,7 +400,6 @@ const createOrder = asyncHandler(async (req, res) => {
 
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
-
   const normalizedAddress1 = v?.normalized;
   const normalizedAddress2 = line2 ? normalizeLine2(line2) : "";
   const thirtyDaysMs = 30 * 86400000;
@@ -410,7 +409,6 @@ const createOrder = asyncHandler(async (req, res) => {
     : { normalizedAddress: normalizedAddress1 };
 
   const existingOrder = await OrderModel.findOne(query);
-
   if (
     existingOrder &&
     Date.now() - existingOrder?.createdAt?.getTime?.() <= thirtyDaysMs
