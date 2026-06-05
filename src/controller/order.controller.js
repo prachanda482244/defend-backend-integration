@@ -410,6 +410,8 @@ const createOrder = asyncHandler(async (req, res) => {
 
   const existingOrder = await OrderModel.findOne(query);
   console.log("Existing order check:", {
+    firstName,
+    lastName,
     _line1,
     _line2,
     normalizedAddress1,
@@ -419,6 +421,8 @@ const createOrder = asyncHandler(async (req, res) => {
     existingOrderId: existingOrder?._id?.toString?.(),
     existingCreatedAt: existingOrder?.createdAt,
     thirtyDaysAgo: new Date(Date.now() - thirtyDaysMs),
+    dateToday: Date.now() - existingOrder?.createdAt?.getTime?.(),
+    isTrue: Date.now() - existingOrder?.createdAt?.getTime?.() <= thirtyDaysMs,
   });
   if (
     existingOrder &&
