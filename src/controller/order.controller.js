@@ -409,26 +409,11 @@ const createOrder = asyncHandler(async (req, res) => {
     : { normalizedAddress: normalizedAddress1 };
 
   const existingOrder = await OrderModel.findOne(query);
-  console.log("Existing order check:", {
-    firstName,
-    lastName,
-    _line1,
-    _line2,
-    normalizedAddress1,
-    normalizedAddress2,
-    existingOrder,
-    query,
-    existingOrderId: existingOrder?._id?.toString?.(),
-    existingCreatedAt: existingOrder?.createdAt,
-    thirtyDaysAgo: new Date(Date.now() - thirtyDaysMs),
-    dateToday: Date.now() - existingOrder?.createdAt?.getTime?.(),
-    isTrue: Date.now() - existingOrder?.createdAt?.getTime?.() <= thirtyDaysMs,
-  });
+
   if (
     existingOrder &&
     Date.now() - existingOrder?.createdAt?.getTime?.() <= thirtyDaysMs
   ) {
-    console.log("Duplicate address detected within 30 days:");
     const msg = "Address already used";
     logFailure({ reason: msg, request: req?.body });
 
