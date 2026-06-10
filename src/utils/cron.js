@@ -20,6 +20,7 @@ cron.schedule("0 0 * * *", async () => {
         $match: {
           subscription: "monthly",
           isActive: true,
+          isRenewable: true,
         },
       },
       {

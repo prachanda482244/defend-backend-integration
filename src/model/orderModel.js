@@ -32,6 +32,10 @@ const orderSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    isRenewable: {
+      type: Boolean,
+      default: false,
+    },
     email: {
       type: String,
       required: true,

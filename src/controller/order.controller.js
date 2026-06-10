@@ -905,10 +905,32 @@ const getDuplicateOrders = asyncHandler(async (req, res) => {
       );
   }
 });
+const addIsRenewableField = async (req, res) => {
+  try {
+    const result = await OrderModel.updateMany(
+      { isRenewable: { $exists: false } },
+      { $set: { isRenewable: false } },
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "isRenewable field added to existing documents",
+      matched: result.matchedCount,
+      modified: result.modifiedCount,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to add isRenewable field",
+      error: error.message,
+    });
+  }
+};
 export {
   createOrder,
   getAll30DaysAgoOrder,
   updateSubscription,
   removeDuplicateOrders,
   getDuplicateOrders,
+  addIsRenewableField,
 };
