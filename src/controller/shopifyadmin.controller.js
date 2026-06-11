@@ -18,8 +18,8 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 // Remix app that owns the Shopify token (same one the cron calls).
 const REMIX_URL =
   process.env.SHOPIFY_APP_URL ||
-  // "https://defent-shopify-app-1.onrender.com/api/create-order";
-  "https://warnings-thickness-varieties-frankfurt.trycloudflare.com/api/create-order";
+  "https://defent-shopify-app-1.onrender.com/api/create-order";
+// "https://warnings-thickness-varieties-frankfurt.trycloudflare.com/api/create-order";
 
 const dateWindow = (req) => {
   const { from, to } = req.query || {};
