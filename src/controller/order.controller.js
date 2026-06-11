@@ -150,7 +150,6 @@ const createOrder = asyncHandler(async (req, res) => {
     }
 
     const existing = await OrderModel.findById(orderId);
-
     if (
       !existing ||
       !existing.isActive ||
@@ -171,7 +170,6 @@ const createOrder = asyncHandler(async (req, res) => {
 
       return res.status(200).json(new ApiResponse(404, null, msg));
     }
-
     const lastRenew =
       existing.lastRenewAt?.getTime?.() ?? existing.updatedAt?.getTime?.() ?? 0;
     const THIRTY_DAYS = 30 * 86400000;
@@ -409,11 +407,12 @@ const createOrder = asyncHandler(async (req, res) => {
     : { normalizedAddress: normalizedAddress1 };
 
   const existingOrder = await OrderModel.findOne(query);
+  const renewRef =
+    existingOrder?.lastRenewAt ??
+    existingOrder?.updatedAt ??
+    existingOrder?.createdAt;
 
-  if (
-    existingOrder &&
-    Date.now() - existingOrder?.createdAt?.getTime?.() <= thirtyDaysMs
-  ) {
+  if (existingOrder && Date.now() - renewRef?.getTime?.() <= thirtyDaysMs) {
     const msg = "Address already used";
     logFailure({ reason: msg, request: req?.body });
 
