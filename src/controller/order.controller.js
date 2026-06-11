@@ -173,7 +173,7 @@ const createOrder = asyncHandler(async (req, res) => {
     }
 
     const lastRenew =
-      existing.lastRenewAt?.getTime?.() ?? existing.createdAt?.getTime?.() ?? 0;
+      existing.lastRenewAt?.getTime?.() ?? existing.updatedAt?.getTime?.() ?? 0;
     const THIRTY_DAYS = 30 * 86400000;
     if (Date.now() - lastRenew < THIRTY_DAYS) {
       const msg = "Renewal not due yet";
