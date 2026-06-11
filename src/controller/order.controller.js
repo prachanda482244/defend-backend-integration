@@ -12,12 +12,12 @@ import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { logSuccess, logFailure } from "../utils/logger.js";
-import { appendOrderRow } from "../utils/sheet.js";
 import {
   validateAddressLine1,
   validateAddressLine2,
 } from "../validators/address.js";
 import { normalizeLine2 } from "../utils/normalizeAddress.js";
+import { appendSingleAndMark } from "../utils/sheet.js";
 
 const joinMulti = (a) =>
   Array.isArray(a) && a.length ? a.join(", ") : a || "";
@@ -83,6 +83,7 @@ const buildReqInfo = (req) => ({
   params: req?.params || {},
   query: req?.query || {},
 });
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 const createOrder = asyncHandler(async (req, res) => {
   const {
@@ -107,7 +108,7 @@ const createOrder = asyncHandler(async (req, res) => {
     isRenewal = false,
   } = req?.body || {};
 
-  // Common required field check
+  // ---- common required-field check (unchanged) ----
   if (
     !firstName ||
     !lastName ||
@@ -119,7 +120,6 @@ const createOrder = asyncHandler(async (req, res) => {
   ) {
     const msg = "Missing required field";
     logFailure({ reason: msg, request: req?.body });
-
     await saveErrorLog({
       module: "createOrder",
       stage: "validation",
@@ -130,18 +130,17 @@ const createOrder = asyncHandler(async (req, res) => {
       context: {
         email: email || "",
         productId: productId || "",
-        subscription: subscription || "",
-        flag: flag || "",
+        subscription,
+        flag,
         isRenewal,
       },
     });
-
     return res.status(400).json(new ApiResponse(400, null, msg));
   }
 
-  // ────────────────────────────────────────────────────────────
-  // RENEWAL PATH — bump lastRenewAt on existing order
-  // ────────────────────────────────────────────────────────────
+  /* ============================================================== *
+   *  RENEWAL PATH — claim the cycle, DO NOT finalize yet.
+   * ============================================================== */
   if (isRenewal) {
     if (!orderId) {
       return res
@@ -153,11 +152,10 @@ const createOrder = asyncHandler(async (req, res) => {
     if (
       !existing ||
       !existing.isActive ||
-      existing.subscription !== "monthly"
+      existing.subscription !== "monthly" ||
+      !existing.isRenewable
     ) {
-      const msg = "No active subscription found for renewal";
-      logFailure({ reason: msg, request: req?.body });
-
+      const msg = "No active renewable subscription found";
       await saveErrorLog({
         module: "createOrder",
         stage: "renewal_lookup",
@@ -165,19 +163,19 @@ const createOrder = asyncHandler(async (req, res) => {
         message: msg,
         statusCode: 404,
         request: buildReqInfo(req),
-        context: { email, productId, subscription, flag, isRenewal: true },
+        context: { orderId, email, productId, flag, isRenewal: true },
       });
-
       return res.status(200).json(new ApiResponse(404, null, msg));
     }
+
+    // due check — lastRenewAt ?? createdAt; updatedAt deliberately NOT used
     const lastRenew =
-      existing.lastRenewAt?.getTime?.() ?? existing.updatedAt?.getTime?.() ?? 0;
-    const THIRTY_DAYS = 30 * 86400000;
-    if (Date.now() - lastRenew < THIRTY_DAYS) {
+      (existing.lastRenewAt ?? existing.createdAt)?.getTime?.() ?? 0;
+    if (Date.now() - lastRenew < THIRTY_DAYS_MS) {
       const msg = "Renewal not due yet";
       await saveErrorLog({
         module: "createOrder",
-        stage: "renewal_duplicate_guard",
+        stage: "renewal_not_due",
         level: "warning",
         message: msg,
         statusCode: 409,
@@ -186,97 +184,67 @@ const createOrder = asyncHandler(async (req, res) => {
       });
       return res.status(200).json(new ApiResponse(409, null, msg));
     }
-    const now = new Date();
-    existing.lastRenewAt = now;
-    await existing.save();
 
-    // Append renewal row to Sheets too (so each cycle is logged)
-    const basePayload = {
-      createdAt: now,
-      firstName: existing.firstName,
-      lastName: existing.lastName,
-      streetAddress: existing.streetAddress,
-      streetAddress2: existing.streetAddress2 || "",
-      postCode: String(existing.postCode).slice(0, 5),
-      email: existing.email,
-      subscription: existing.subscription,
-      productId: existing.productId,
-      age: existing.demographics?.age || age || "",
-      wehoHearAboutUs:
-        existing.demographics?.wehoHearAboutUs ||
-        wehoHearAboutUs ||
-        "Instagram",
-      household_size:
-        existing.demographics?.household_size || household_size || "",
-      ethnicity: joinMulti(existing.demographics?.ethnicity || ethnicity),
-      household_language: joinMulti(
-        existing.demographics?.household_language || household_language,
-      ),
-    };
+    const cycle = cycleKeyFor(existing);
 
-    const sheetPayload =
-      flag === "defentLA"
-        ? basePayload
-        : {
-            ...basePayload,
-            gender: existing.demographics?.gender || gender || "",
-            identity: existing.demographics?.identity || identity || "",
-            identifyAsLGBTQ:
-              existing.demographics?.identifyAsLGBTQ || identifyAsLGBTQ
-                ? "Yes"
-                : "No",
-          };
-
+    // ---- ATOMIC, DUPLICATE-PROOF CLAIM ----
+    // The unique index on (orderId, cycle) guarantees only ONE claim per
+    // cycle. A duplicate-key error means this cycle is already being
+    // processed or is done -> we safely skip. This is what prevents the
+    // "same order created 10-20 times" disaster.
+    let claim;
     try {
-      await appendOrderRow(sheetPayload, flag);
-    } catch (e) {
-      console.error("Sheets append failed (renewal):", e);
-
-      await saveErrorLog({
-        module: "createOrder",
-        stage: "sheet_append_renewal",
-        level: "error",
-        message: e?.message || "Sheets append failed on renewal",
-        errorName: e?.name || "",
-        stack: e?.stack || "",
-        request: buildReqInfo(req),
-        context: {
-          orderId: existing?._id?.toString?.() || "",
-          email,
-          productId,
-          subscription,
-          flag,
-          isRenewal: true,
-        },
-        externalService: {
-          name: "google-sheets",
-          endpoint: "appendOrderRow",
-          method: "APPEND",
+      claim = await RenewalLogModel.create({
+        orderId: existing._id,
+        cycle,
+        status: "processing",
+        snapshot: {
+          firstName: existing.firstName,
+          lastName: existing.lastName,
+          email: existing.email,
+          productId: existing.productId,
+          flag: existing.source === "Defent La" ? "defentLA" : "defentWeho",
         },
       });
+    } catch (e) {
+      if (e?.code === 11000) {
+        // already claimed for this cycle — idempotent no-op
+        return res
+          .status(200)
+          .json(
+            new ApiResponse(
+              200,
+              { orderId, cycle, alreadyClaimed: true },
+              "Renewal already in progress",
+            ),
+          );
+      }
+      throw e;
     }
 
-    logSuccess({
-      message: "Subscription renewed successfully",
-      orderId: existing._id,
-      email,
-      productId,
-      timestamp: now,
-    });
-
-    return res
-      .status(200)
-      .json(new ApiResponse(200, existing, "Subscription renewed"));
+    // Hand back enough for Remix to create + confirm the Shopify order.
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          orderId: existing._id.toString(),
+          renewalLogId: claim._id.toString(),
+          cycle,
+          isRenewal: true,
+          order: existing, // full doc so Remix can build the Shopify payload
+        },
+        "Renewal claimed",
+      ),
+    );
   }
 
-  // ────────────────────────────────────────────────────────────
-  // FIRST-TIME ORDER PATH — your existing flow, untouched
-  // ────────────────────────────────────────────────────────────
+  /* ============================================================== *
+   *  FIRST-TIME PATH — validations preserved from your code.
+   * ============================================================== */
   const v1 = validateAddressLine1(_line1);
   if (!v1?.ok) {
     const msg = v1?.error || "Invalid address line 1";
     logFailure({ reason: msg, request: req?.body });
-
     await saveErrorLog({
       module: "createOrder",
       stage: "address_line1_validation",
@@ -287,17 +255,13 @@ const createOrder = asyncHandler(async (req, res) => {
       context: { email, productId, subscription, flag },
       meta: { streetAddress: _line1 },
     });
-
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
-
-  const line1 = v1?.value;
+  const line1 = v1.value;
 
   const v2 = validateAddressLine2(_line2);
   if (!v2?.ok) {
     const msg = v2?.error || "Invalid address line 2";
-    logFailure({ reason: msg, request: req?.body });
-
     await saveErrorLog({
       module: "createOrder",
       stage: "address_line2_validation",
@@ -308,15 +272,12 @@ const createOrder = asyncHandler(async (req, res) => {
       context: { email, productId, subscription, flag },
       meta: { streetAddress2: _line2 },
     });
-
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
+  const line2 = v2.value;
 
-  const line2 = v2?.value;
   if (line2 && areAddressLinesSame(line1, line2)) {
     const msg = "Address line 1 and line 2 cannot be the same";
-    logFailure({ reason: msg, request: req?.body });
-
     await saveErrorLog({
       module: "createOrder",
       stage: "address_compare",
@@ -327,28 +288,23 @@ const createOrder = asyncHandler(async (req, res) => {
       context: { email, productId, subscription, flag },
       meta: { line1, line2 },
     });
-
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
   const isLA = flag === "defentLA";
   const city = isLA ? "Los Angeles" : "West Hollywood";
-
   const oneLine = `${line1}, ${city}, CA ${String(postCode).slice(0, 5)}`;
+
   const v = await validateAddressWithZipFallback(oneLine, {
     postCode,
     isLA,
     city,
     line1,
   });
-
   if (!v?.ok) {
     const msg = isLA
       ? "The address must be located within Los Angeles, CA."
       : "The address must be located within West Hollywood, CA.";
-
-    logFailure({ reason: "Invalid address", request: req?.body });
-
     await saveErrorLog({
       module: "createOrder",
       stage: "address_validation_api",
@@ -362,26 +318,18 @@ const createOrder = asyncHandler(async (req, res) => {
         endpoint: "validateUSAddress",
         method: "POST",
       },
-      meta: {
-        inputAddress: oneLine,
-        validatorResponse: v || null,
-      },
+      meta: { inputAddress: oneLine, validatorResponse: v || null },
     });
-
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
   const serviceAreaOK = isLA
     ? isLosAngelesOK(v?.components)
     : isWestHollywoodOK(v?.components);
-
   if (!serviceAreaOK) {
     const msg = isLA
       ? "Service area is Los Angeles, CA."
       : "Service area is West Hollywood, CA (ZIPs: 90038, 90046, 90048, 90069)";
-
-    logFailure({ reason: msg, request: req?.body });
-
     await saveErrorLog({
       module: "createOrder",
       stage: "service_area_check",
@@ -390,32 +338,28 @@ const createOrder = asyncHandler(async (req, res) => {
       statusCode: 400,
       request: buildReqInfo(req),
       context: { email, productId, subscription, flag },
-      meta: {
-        inputAddress: oneLine,
-        components: v?.components || null,
-      },
+      meta: { inputAddress: oneLine, components: v?.components || null },
     });
-
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
-  const normalizedAddress1 = v?.normalized;
-  const normalizedAddress2 = line2 ? normalizeLine2(line2) : "";
-  const thirtyDaysMs = 30 * 86400000;
 
+  const normalizedAddress1 = v.normalized;
+  const normalizedAddress2 = line2 ? normalizeLine2(line2) : "";
+
+  // ---- DEDUP (fixed): newest order at this address, lastRenewAt ?? createdAt ----
   const query = line2
     ? { normalizedAddress: normalizedAddress1, normalizedAddress2 }
     : { normalizedAddress: normalizedAddress1 };
 
-  const existingOrder = await OrderModel.findOne(query);
-  const renewRef =
-    existingOrder?.lastRenewAt ??
-    existingOrder?.updatedAt ??
-    existingOrder?.createdAt;
+  const existingOrder = await OrderModel.findOne(query).sort({ createdAt: -1 });
+  const renewRef = existingOrder?.lastRenewAt ?? existingOrder?.createdAt;
 
-  if (existingOrder && Date.now() - renewRef?.getTime?.() <= thirtyDaysMs) {
+  if (
+    existingOrder &&
+    renewRef &&
+    Date.now() - renewRef.getTime() <= THIRTY_DAYS_MS
+  ) {
     const msg = "Address already used";
-    logFailure({ reason: msg, request: req?.body });
-
     await saveErrorLog({
       module: "createOrder",
       stage: "duplicate_address_check",
@@ -429,14 +373,15 @@ const createOrder = asyncHandler(async (req, res) => {
         subscription,
         flag,
         orderId: existingOrder?._id?.toString?.() || "",
-        normalizedAddress: normalizedAddress1 || "",
-        normalizedAddress2: normalizedAddress2 || "",
+        normalizedAddress: normalizedAddress1,
+        normalizedAddress2,
       },
     });
-
     return res.status(200).json(new ApiResponse(400, null, msg));
   }
 
+  // ---- create the order (sync states default to pending) ----
+  const isSub = subscription !== "one_time";
   const order = await OrderModel.create({
     firstName,
     lastName,
@@ -446,7 +391,8 @@ const createOrder = asyncHandler(async (req, res) => {
     email,
     productId,
     subscription,
-    isActive: subscription !== "one_time",
+    isActive: isSub,
+    isRenewable: isSub, // subscriptions renew; one_time does not
     normalizedAddress: normalizedAddress1,
     normalizedAddress2: normalizedAddress2 || null,
     source: flag === "defentLA" ? "Defent La" : "Defent Weho",
@@ -460,15 +406,12 @@ const createOrder = asyncHandler(async (req, res) => {
       identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
       wehoHearAboutUs: wehoHearAboutUs || "",
     },
+    shopifySync: { status: "pending" },
+    sheetSync: { status: "pending" },
   });
 
   if (!order) {
     const msg = "Failed to create an order";
-    logFailure({
-      reason: "Failed to create an order after validation",
-      request: req?.body,
-    });
-
     await saveErrorLog({
       module: "createOrder",
       stage: "db_create",
@@ -481,83 +424,163 @@ const createOrder = asyncHandler(async (req, res) => {
         productId,
         subscription,
         flag,
-        normalizedAddress: normalizedAddress1 || "",
-        normalizedAddress2: normalizedAddress2 || "",
+        normalizedAddress: normalizedAddress1,
+        normalizedAddress2,
       },
     });
-
     return res.status(400).json(new ApiResponse(400, null, msg));
   }
 
-  const basePayload = {
-    createdAt: order?.createdAt,
-    firstName: order?.firstName,
-    lastName: order?.lastName,
-    streetAddress: order?.streetAddress,
-    streetAddress2: order?.streetAddress2 || "",
-    postCode: String(postCode).slice(0, 5),
-    email: order?.email,
-    subscription: order?.subscription,
-    productId: order?.productId,
-    age: age || "",
-    wehoHearAboutUs: wehoHearAboutUs || "Instagram",
-    household_size: household_size || "",
-    ethnicity: joinMulti(ethnicity),
-    household_language: joinMulti(household_language),
-  };
-
-  let sheetPayload;
-  if (flag === "defentLA") {
-    sheetPayload = basePayload;
-  } else {
-    sheetPayload = {
-      ...basePayload,
-      gender: gender || "",
-      identity: identity || "",
-      identifyAsLGBTQ: identifyAsLGBTQ ? "Yes" : "No",
-    };
-  }
-
-  try {
-    await appendOrderRow(sheetPayload, flag);
-  } catch (e) {
-    console.error("Sheets append failed:", e);
-
-    await saveErrorLog({
-      module: "createOrder",
-      stage: "sheet_append",
-      level: "error",
-      message: e?.message || "Sheets append failed",
-      errorName: e?.name || "",
-      stack: e?.stack || "",
-      request: buildReqInfo(req),
-      context: {
-        orderId: order?._id?.toString?.() || "",
-        email,
-        productId,
-        subscription,
-        flag,
-        normalizedAddress: normalizedAddress1 || "",
-        normalizedAddress2: normalizedAddress2 || "",
-      },
-      externalService: {
-        name: "google-sheets",
-        endpoint: "appendOrderRow",
-        method: "APPEND",
-      },
-    });
-  }
+  // ---- intake sheet append (best-effort; flush is the backstop) ----
+  await appendSingleAndMark(order, flag);
 
   logSuccess({
-    message: "Order created successfully",
-    orderId: order?._id,
+    message: "Order created",
+    orderId: order._id,
     email,
     productId,
     timestamp: new Date(),
   });
 
-  return res.status(200).json(new ApiResponse(200, order, "Order created"));
+  // Remix now creates the Shopify order, then calls /order/confirm.
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { orderId: order._id.toString(), isRenewal: false, order },
+        "Order created",
+      ),
+    );
 });
+
+/* ================================================================== *
+ *  confirmOrder  (POST /order/confirm)
+ *  Called by Remix AFTER attempting the Shopify order.
+ *  body: { orderId, cycle?, isRenewal, status: 'synced'|'failed',
+ *          shopifyOrderId?, error? }
+ * ================================================================== */
+const confirmOrder = asyncHandler(async (req, res) => {
+  const {
+    orderId,
+    cycle,
+    isRenewal = false,
+    status,
+    shopifyOrderId = null,
+    error = "",
+  } = req?.body || {};
+
+  if (!orderId || !["synced", "failed"].includes(status)) {
+    return res
+      .status(400)
+      .json(new ApiResponse(400, null, "orderId and valid status required"));
+  }
+
+  const now = new Date();
+
+  /* ---------- RENEWAL confirm ---------- */
+  if (isRenewal) {
+    if (!cycle)
+      return res
+        .status(400)
+        .json(new ApiResponse(400, null, "cycle required for renewal confirm"));
+
+    if (status === "synced") {
+      // 1) finalize the order: advance lastRenewAt (THE fix)
+      await OrderModel.updateOne(
+        { _id: orderId },
+        { $set: { lastRenewAt: now } },
+      );
+      // 2) complete the cycle log; sheetSync stays pending for the flush
+      await RenewalLogModel.updateOne(
+        { orderId, cycle },
+        {
+          $set: {
+            status: "completed",
+            shopifyOrderId,
+            "shopifySync.status": "synced",
+            "shopifySync.lastAttemptAt": now,
+          },
+          $inc: { "shopifySync.attempts": 1 },
+        },
+      );
+      logSuccess({ message: "Renewal confirmed", orderId, timestamp: now });
+      return res
+        .status(200)
+        .json(new ApiResponse(200, { orderId, cycle }, "Renewal confirmed"));
+    }
+
+    // FAILED renewal: release the cycle so the next cron retries cleanly.
+    // (lastRenewAt was never advanced, so the order is still "due".)
+    await RenewalLogModel.deleteOne({ orderId, cycle });
+    await saveErrorLog({
+      module: "confirmOrder",
+      stage: "renewal_failed_release",
+      level: "error",
+      message: error || "Shopify renewal failed",
+      request: buildReqInfo(req),
+      context: { orderId, cycle, isRenewal: true },
+    });
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          { orderId, cycle, released: true },
+          "Renewal released for retry",
+        ),
+      );
+  }
+
+  /* ---------- FIRST-TIME confirm ---------- */
+  if (status === "synced") {
+    await OrderModel.updateOne(
+      { _id: orderId },
+      {
+        $set: {
+          shopifyOrderId,
+          "shopifySync.status": "synced",
+          "shopifySync.lastAttemptAt": now,
+        },
+        $inc: { "shopifySync.attempts": 1 },
+      },
+    );
+    return res
+      .status(200)
+      .json(new ApiResponse(200, { orderId }, "Order confirmed"));
+  }
+
+  // FAILED first-time: leave retryable for the reconciler.
+  await OrderModel.updateOne(
+    { _id: orderId },
+    {
+      $set: {
+        "shopifySync.status": "failed",
+        "shopifySync.lastError": error || "Shopify create failed",
+        "shopifySync.lastAttemptAt": now,
+      },
+      $inc: { "shopifySync.attempts": 1 },
+    },
+  );
+  await saveErrorLog({
+    module: "confirmOrder",
+    stage: "firsttime_failed",
+    level: "error",
+    message: error || "Shopify create failed",
+    request: buildReqInfo(req),
+    context: { orderId, isRenewal: false },
+  });
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { orderId, failed: true },
+        "Order marked failed (retryable)",
+      ),
+    );
+});
+
 const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req?.query?.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req?.query?.limit) || 25, 1), 200);
@@ -932,4 +955,5 @@ export {
   removeDuplicateOrders,
   getDuplicateOrders,
   addIsRenewableField,
+  confirmOrder,
 };

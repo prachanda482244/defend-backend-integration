@@ -35,7 +35,7 @@ app.get("/api/v1/health", (_, res) => {
     success: true,
     data: [
       {
-        name: "Health Check",
+        name: "Api is running",
       },
     ],
   });

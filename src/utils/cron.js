@@ -1,51 +1,98 @@
 // cron/recurring.js
 import cron from "node-cron";
 import axios from "axios";
-import { OrderModel } from "../model/orderModel.js";
+import { OrderModel, CronLockModel } from "../model/orderModel.js";
+import { flushPendingSheets } from "./sheet.js";
 
-let isRunning = false;
+const REMIX_URL =
+  process.env.SHOPIFY_APP_URL ||
+  "https://defent-shopify-app-1.onrender.com/api/create-order";
 
-// ⚠ change to "0 0 * * *" in production
-// cron.schedule("*/30 * * * * *", async () => {
-cron.schedule("0 0 * * *", async () => {
-  if (isRunning) return;
-  isRunning = true;
+const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+const LOCK_NAME = "recurring-renewals";
+const LOCK_TTL_MS = 30 * 60 * 1000; // lease length; reclaimable if a run dies
+const PER_CALL_DELAY_MS = 300; // gentle pacing on top of Remix's Shopify throttle
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ---- DB-level lock so only ONE run executes, even across instances ---- */
+async function acquireLock() {
+  const now = new Date();
+  const until = new Date(now.getTime() + LOCK_TTL_MS);
+  try {
+    // Reclaim only if no lock exists OR the existing lease has expired.
+    const res = await CronLockModel.findOneAndUpdate(
+      { name: LOCK_NAME, lockedUntil: { $lt: now } },
+      {
+        $set: { lockedUntil: until, holder: process.env.HOSTNAME || "worker" },
+      },
+      { upsert: true, new: true },
+    );
+    return !!res;
+  } catch (e) {
+    // Upsert race -> another instance already holds a live lock.
+    if (e?.code === 11000) return false;
+    throw e;
+  }
+}
+
+async function releaseLock() {
+  try {
+    await CronLockModel.updateOne(
+      { name: LOCK_NAME },
+      { $set: { lockedUntil: new Date(0) } },
+    );
+  } catch (e) {
+    console.error("[cron] lock release failed:", e?.message);
+  }
+}
+
+/* ---- find due renewals, DEDUPED to ONE active doc per address ---- *
+ * If re-orders ever created multiple active docs at the same address,
+ * this guarantees only the newest renews -> never two Shopify orders
+ * per cycle for the same household.                                   */
+async function findDueRenewals() {
+  const thirtyDaysAgo = new Date(Date.now() - THIRTY_DAYS);
+  return OrderModel.aggregate([
+    { $match: { subscription: "monthly", isActive: true, isRenewable: true } },
+    { $addFields: { renewAt: { $ifNull: ["$lastRenewAt", "$createdAt"] } } },
+    { $match: { renewAt: { $lte: thirtyDaysAgo } } },
+    { $sort: { renewAt: 1, createdAt: -1 } },
+    {
+      $group: {
+        _id: {
+          addr: "$normalizedAddress",
+          addr2: { $ifNull: ["$normalizedAddress2", ""] },
+        },
+        doc: { $first: "$$ROOT" },
+      },
+    },
+    { $replaceRoot: { newRoot: "$doc" } },
+  ]);
+}
+
+async function runRenewals() {
+  const got = await acquireLock();
+  if (!got) {
+    console.log("[cron] another run holds the lock — skipping.");
+    return;
+  }
 
   try {
-    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
-    const thirtyDaysAgo = new Date(Date.now() - THIRTY_DAYS);
-
-    const monthlyDue = await OrderModel.aggregate([
-      {
-        $match: {
-          subscription: "monthly",
-          isActive: true,
-          isRenewable: true,
-        },
-      },
-      {
-        $addFields: {
-          renewAt: { $ifNull: ["$lastRenewAt", "$createdAt"] },
-        },
-      },
-      {
-        $match: {
-          renewAt: { $lte: thirtyDaysAgo },
-        },
-      },
-    ]);
-
-    if (!monthlyDue.length) {
-      console.log("No subscriptions due.");
+    const due = await findDueRenewals();
+    if (!due.length) {
+      console.log("[cron] no subscriptions due.");
       return;
     }
+    console.log(`[cron] ${due.length} subscription(s) due.`);
 
-    for (const order of monthlyDue) {
-      console.log("Processing renewal:", order.firstName);
+    let ok = 0;
+    let failed = 0;
 
+    for (const order of due) {
       try {
-        const response = await axios.post(
-          "https://defent-shopify-app-1.onrender.com/api/create-order",
+        const resp = await axios.post(
+          REMIX_URL,
           {
             orderId: order._id.toString(),
             firstName: order.firstName,
@@ -69,29 +116,46 @@ cron.schedule("0 0 * * *", async () => {
               wehoHearAboutUs: order.demographics?.wehoHearAboutUs || "",
             },
           },
-          { timeout: 15000 },
+          { timeout: 30000 },
         );
 
-        if (response.status !== 200 || response.data?.success !== true) {
-          console.error("Renewal blocked:", response.data);
-          continue;
+        if (resp.status !== 200 || resp.data?.success !== true) {
+          failed += 1;
+          console.error(
+            "[cron] renewal not ok:",
+            order._id.toString(),
+            resp.data?.message,
+          );
+        } else {
+          ok += 1;
         }
-
-        console.log("Renewal succeeded:", order.firstName);
-        // lastRenewAt is bumped by the backend via the isRenewal path,
-        // so the cron doesn't need to update it here.
       } catch (err) {
+        failed += 1;
         console.error(
-          "Renewal error:",
-          err?.response?.status,
+          "[cron] renewal error:",
+          order._id.toString(),
           err?.response?.data || err?.message,
         );
-        continue;
+        // Continue — confirmOrder already released failed cycles for retry next run.
       }
+
+      await sleep(PER_CALL_DELAY_MS);
     }
+
+    // Backstop: one batched sheet write for everything still pending.
+    const sheet = await flushPendingSheets();
+
+    console.log(
+      `[cron] done. ok=${ok} failed=${failed} sheet=${JSON.stringify(sheet)}`,
+    );
   } catch (err) {
-    console.error("Recurring cron error:", err);
+    console.error("[cron] fatal:", err?.message);
   } finally {
-    isRunning = false;
+    await releaseLock();
   }
-});
+}
+
+// ⚠ production: midnight daily. For testing swap to "*/30 * * * * *".
+cron.schedule("0 0 * * *", runRenewals);
+
+export { runRenewals }; // exported so /admin can trigger a manual run if needed
