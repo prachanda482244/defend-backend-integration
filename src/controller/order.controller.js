@@ -948,6 +948,57 @@ const addIsRenewableField = async (req, res) => {
     });
   }
 };
+const backfillSyncStatus = asyncHandler(async (req, res) => {
+  // Optional body. status defaults to "synced" (old orders were already
+  // fulfilled). Use "skipped" if you'd rather not assert they synced,
+  // or "pending" if you actually want reconcile to back-fill them.
+  const { status = "synced", seedRenewable = false } = req?.body || {};
+
+  const allowed = ["synced", "skipped", "pending"];
+  if (!allowed.includes(status)) {
+    throw new ApiError(400, `status must be one of: ${allowed.join(", ")}`);
+  }
+
+  // Legacy docs = those missing the sync field entirely (your ~331).
+  const legacyFound = await OrderModel.countDocuments({
+    "shopifySync.status": { $exists: false },
+  });
+
+  // Only touch docs that don't already have a status → safe to re-run.
+  const syncResult = await OrderModel.updateMany(
+    { "shopifySync.status": { $exists: false } },
+    { $set: { "shopifySync.status": status, "sheetSync.status": status } },
+  );
+
+  // Optional: turn renewals ON for existing active monthly subscribers,
+  // otherwise the cron won't renew them.
+  let renewableSeeded = 0;
+  if (seedRenewable === true) {
+    const r = await OrderModel.updateMany(
+      { subscription: "monthly", isActive: true, isRenewable: { $ne: true } },
+      { $set: { isRenewable: true } },
+    );
+    renewableSeeded = r.modifiedCount;
+  }
+
+  const stillMissing = await OrderModel.countDocuments({
+    "shopifySync.status": { $exists: false },
+  });
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        status,
+        legacyFound,
+        syncFieldsBackfilled: syncResult.modifiedCount,
+        renewableSeeded,
+        stillMissing, // should be 0 after a successful run
+      },
+      "Backfill complete",
+    ),
+  );
+});
 export {
   createOrder,
   getAll30DaysAgoOrder,
@@ -956,4 +1007,5 @@ export {
   getDuplicateOrders,
   addIsRenewableField,
   confirmOrder,
+  backfillSyncStatus,
 };

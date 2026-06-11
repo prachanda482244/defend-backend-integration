@@ -7,6 +7,7 @@ import {
   getDuplicateOrders,
   addIsRenewableField,
   confirmOrder,
+  backfillSyncStatus,
 } from "../controller/order.controller.js";
 
 const orderRouter = Router();
@@ -19,5 +20,5 @@ orderRouter
   .get(getDuplicateOrders);
 orderRouter.route("/:orderId").put(updateSubscription);
 orderRouter.route("/add-field").post(addIsRenewableField);
-
+orderRouter.route("/backfill-sync-status").post(backfillSyncStatus);
 export default orderRouter;
