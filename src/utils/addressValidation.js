@@ -1,3 +1,4 @@
+// utils/addressValidation.js
 import { normalizeAddress } from "./normalizeAddress.js";
 
 const CENSUS_URL =
@@ -74,6 +75,11 @@ const LA_ZIPS = new Set([
   "90095",
 ]);
 
+/**
+ * Calls the US Census geocoder.
+ * Returns { ok: true, normalized, components, coordinates } on a hit,
+ *         { ok: false, reason } otherwise.
+ */
 export async function validateUSAddress(oneLine) {
   const url = new URL(CENSUS_URL);
   url.search = new URLSearchParams({
@@ -118,18 +124,6 @@ export async function validateUSAddress(oneLine) {
   };
 }
 
-/**
- * Wraps validateUSAddress. The Census geocoder frequently returns `not_found`
- * for real, deliverable addresses (TIGER coverage gaps). Rather than rejecting
- * those outright, we fall back to a ZIP-based acceptance using the caller's
- * postCode and flag, building a synthetic "ok" result from the input.
- *
- * @param {string} oneLine  e.g. "8500 Santa Monica Blvd, West Hollywood, CA 90069"
- * @param {object} opts
- * @param {string} opts.postCode  raw postCode from the request
- * @param {boolean} opts.isLA     true when flag === "defentLA"
- * @param {string} opts.city      city string used to build oneLine
- */
 // Looks like a real US street line: leading house number + a street-type word.
 function looksLikeStreetAddress(line1) {
   const s = String(line1 || "")
@@ -143,26 +137,80 @@ function looksLikeStreetAddress(line1) {
   return hasHouseNumber && hasStreetType;
 }
 
+/**
+ * Wraps validateUSAddress with safe fallback handling.
+ *
+ * CRITICAL FIX (this is what stops the "806 E 80th St + 90069" bug):
+ *
+ *   - "not_found" is no longer treated as recoverable. If Census looked
+ *     and didn't find the address, we trust that NEGATIVE answer and
+ *     reject. The old code did the opposite — it forgave not_found and
+ *     accepted on the user's typed ZIP, which is exactly how a bad
+ *     South-LA street got paired with a West Hollywood ZIP.
+ *
+ *   - Only transient failures (timeout / network error / 5xx) are
+ *     considered recoverable.
+ *
+ *   - Even on a transient failure, we DO NOT trust the user's typed ZIP.
+ *     We retry Census with just "<street>, CA" (no city, no ZIP) and
+ *     accept ONLY if Census itself returns a ZIP that is in our
+ *     service area. If Census returns a different ZIP -> reject as a
+ *     zip_mismatch. If the retry also fails transiently -> accept but
+ *     mark needsReview so the order can be held for manual review.
+ *
+ * @param {string} oneLine  e.g. "8500 Santa Monica Blvd, West Hollywood, CA 90069"
+ * @param {object} opts
+ * @param {string} opts.postCode  raw postCode from the request
+ * @param {boolean} opts.isLA     true when flag === "defentLA"
+ * @param {string} opts.city      city string used to build oneLine
+ * @param {string} opts.line1     raw street line from the request
+ */
 export async function validateAddressWithZipFallback(
   oneLine,
-  { postCode, isLA, city, line1 }, // pass line1 in from the controller
+  { postCode, isLA, city, line1 },
 ) {
   const v = await validateUSAddress(oneLine);
   if (v.ok) return v;
 
-  const recoverable = v.reason === "not_found" || v.reason === "timeout";
+  // Only forgive Census being temporarily unreachable.
+  // "not_found" is a real negative answer — do NOT recover from it.
+  const recoverable =
+    v.reason === "timeout" ||
+    v.reason === "network_error" ||
+    (typeof v.reason === "string" && v.reason.startsWith("http_5"));
+
   if (!recoverable) return v;
 
   // Don't fall back for input that isn't even shaped like a street address.
   if (!looksLikeStreetAddress(line1)) return v;
 
   const zip5 = String(postCode || "").slice(0, 5);
-  const zipInArea = isLA ? LA_ZIPS.has(zip5) : ALLOWED_ZIPS.has(zip5);
-  if (!zipInArea) return v;
+  const expectedZipSet = isLA ? LA_ZIPS : ALLOWED_ZIPS;
+  if (!expectedZipSet.has(zip5)) return v;
 
+  // Independent confirmation: ask Census what ZIP this STREET is in,
+  // without telling it the city or ZIP. If Census can answer and the
+  // returned ZIP isn't in our area, reject.
+  const retry = await validateUSAddress(`${line1}, CA`);
+  if (retry.ok) {
+    if (!expectedZipSet.has(retry.components.zip5)) {
+      // Census found this street — at a DIFFERENT ZIP. Bad address.
+      return {
+        ok: false,
+        reason: "zip_mismatch",
+        components: retry.components,
+      };
+    }
+    // Census found it and the ZIP IS in our area — trust Census's answer.
+    return retry;
+  }
+
+  // Both Census calls failed transiently. Conservative accept, but
+  // flag for review so the controller can hold sync.
   return {
     ok: true,
     fallback: true,
+    needsReview: true,
     normalized: oneLine.toUpperCase(),
     components: {
       city: city || (isLA ? "Los Angeles" : "West Hollywood"),
