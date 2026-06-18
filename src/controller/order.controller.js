@@ -1,5 +1,5 @@
-import { OrderModel } from "../model/orderModel.js";
 import { ErrorLogModel } from "../model/errorLog.js";
+import { OrderModel, RenewalLogModel } from "../model/orderModel.js";
 
 import {
   areAddressLinesSame,
@@ -18,6 +18,11 @@ import {
 } from "../validators/address.js";
 import { normalizeLine2 } from "../utils/normalizeAddress.js";
 import { appendSingleAndMark } from "../utils/sheet.js";
+
+const cycleKeyFor = (order) =>
+  (order.lastRenewAt ?? order.createdAt ?? new Date())
+    .toISOString()
+    .slice(0, 10);
 
 const joinMulti = (a) =>
   Array.isArray(a) && a.length ? a.join(", ") : a || "";

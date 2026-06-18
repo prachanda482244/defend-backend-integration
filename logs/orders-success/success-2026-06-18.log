@@ -4,3 +4,4 @@
 {"email":"test7111@example.com","level":"info","message":"Order created","orderId":"6a339f5bd88afe9ef1543ae6","productId":"PROD_001","timestamp":"2026-06-18T07:33:49.848Z","type":"success"}
 {"email":"test.la.01@example.com","level":"info","message":"Order created","orderId":"6a33a280740bc3eb532327d0","productId":"PROD_LA_1","timestamp":"2026-06-18T07:47:15.041Z","type":"success"}
 {"email":"test.weho.01@example.com","level":"info","message":"Order created","orderId":"6a33a28f740bc3eb532327d4","productId":"PROD_WEHO_1","timestamp":"2026-06-18T07:47:29.331Z","type":"success"}
+{"email":"test.weho.01@example.com","level":"info","message":"Order created","orderId":"6a33b6a1471ffdd1da65fecd","productId":"PROD_WEHO_1","timestamp":"2026-06-18T09:13:07.303Z","type":"success"}
