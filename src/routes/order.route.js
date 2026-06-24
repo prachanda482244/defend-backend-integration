@@ -8,6 +8,7 @@ import {
   addIsRenewableField,
   confirmOrder,
   backfillSyncStatus,
+  syncMonthlyToNewSheet,
 } from "../controller/order.controller.js";
 
 const orderRouter = Router();
@@ -21,4 +22,5 @@ orderRouter
 orderRouter.route("/:orderId").put(updateSubscription);
 orderRouter.route("/add-field").post(addIsRenewableField);
 orderRouter.route("/backfill-sync-status").post(backfillSyncStatus);
+orderRouter.route("/sync-monthly-sheet").post(syncMonthlyToNewSheet);
 export default orderRouter;

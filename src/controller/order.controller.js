@@ -1,6 +1,7 @@
 import { ErrorLogModel } from "../model/errorLog.js";
 import { OrderModel, RenewalLogModel } from "../model/orderModel.js";
 
+import { appendMonthly, backfillMonthlySheet } from "../utils/monthlySheet.js";
 import {
   areAddressLinesSame,
   isWestHollywoodOK,
@@ -396,8 +397,8 @@ const createOrder = asyncHandler(async (req, res) => {
     email,
     productId,
     subscription,
-    isActive: isSub,
-    isRenewable: isSub, // subscriptions renew; one_time does not
+    isActive: false, //isSub,
+    isRenewable: false, // isSub, // subscriptions renew; one_time does not
     normalizedAddress: normalizedAddress1,
     normalizedAddress2: normalizedAddress2 || null,
     source: flag === "defentLA" ? "Defent La" : "Defent Weho",
@@ -438,6 +439,9 @@ const createOrder = asyncHandler(async (req, res) => {
 
   // ---- intake sheet append (best-effort; flush is the backstop) ----
   await appendSingleAndMark(order, flag);
+  if (order.subscription === "monthly") {
+    await appendMonthly(order);
+  }
 
   logSuccess({
     message: "Order created",
@@ -1004,6 +1008,35 @@ const backfillSyncStatus = asyncHandler(async (req, res) => {
     ),
   );
 });
+
+const syncMonthlyToNewSheet = asyncHandler(async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req?.body?.limit) || 1000, 1), 5000);
+  try {
+    const result = await backfillMonthlySheet({ limit });
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          result,
+          `Synced ${result.appended} monthly order(s); ${result.remaining} remaining`,
+        ),
+      );
+  } catch (error) {
+    await saveErrorLog({
+      module: "syncMonthlyToNewSheet",
+      stage: "monthly_backfill",
+      level: "error",
+      message: error?.message || "Monthly backfill failed",
+      statusCode: 500,
+      request: buildReqInfo(req),
+    });
+    return res
+      .status(500)
+      .json(new ApiResponse(500, null, `Backfill failed: ${error.message}`));
+  }
+});
+
 export {
   createOrder,
   getAll30DaysAgoOrder,
@@ -1013,4 +1046,5 @@ export {
   addIsRenewableField,
   confirmOrder,
   backfillSyncStatus,
+  syncMonthlyToNewSheet,
 };
