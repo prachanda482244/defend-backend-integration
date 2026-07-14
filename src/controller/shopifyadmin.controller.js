@@ -10,15 +10,21 @@
  * ------------------------------------------------------------------ */
 
 import axios from "axios";
+import { RECURRING_MATCH } from "../utils/cycle.js";
+import { resolveRemixUrl } from "../utils/remixUrl.js";
 import { OrderModel, RenewalLogModel } from "../model/orderModel.js";
 import { flushPendingSheets, appendRowsBatch } from "../utils/sheet.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 
 // Remix app that owns the Shopify token (same one the cron calls).
-const REMIX_URL =
-  process.env.SHOPIFY_APP_URL ||
-  "https://defent-shopify-app-1.onrender.com/api/create-order";
+/* ++ FIXED ++  Was a hand-rolled fallback that couldn't work:
+     reconcileCron       -> "/api/create-order"   (a RELATIVE path — axios can't POST to that)
+     retry/shopifyadmin  -> a hardcoded tunnel URL that is now dead
+   And none of them normalised SHOPIFY_APP_URL, so a base-URL-only value
+   (the Shopify CLI's format) POSTed to "/" and got a 405.
+   One resolver, one behaviour, throws loudly if unset. See remixUrl.js. */
+const REMIX_URL = () => resolveRemixUrl();
 // "https://warnings-thickness-varieties-frankfurt.trycloudflare.com/api/create-order";
 
 const dateWindow = (req) => {
@@ -98,7 +104,7 @@ export const reconcile = asyncHandler(async (req, res) => {
     try {
       // retry mode: Remix skips dedup/create and just (re)creates Shopify + confirms
       await axios.post(
-        REMIX_URL,
+        REMIX_URL(),
         {
           retry: true,
           orderId: o._id.toString(),
@@ -138,7 +144,7 @@ export const reconcile = asyncHandler(async (req, res) => {
     if (!o) continue;
     try {
       await axios.post(
-        REMIX_URL,
+        REMIX_URL(),
         {
           retry: true,
           orderId: o._id.toString(),
@@ -150,7 +156,7 @@ export const reconcile = asyncHandler(async (req, res) => {
           postCode: o.postCode,
           email: o.email,
           productId: o.productId,
-          subscription: "monthly",
+          subscription: RECURRING_MATCH,
           flag: o.source === "Defent La" ? "defentLA" : "defentWeho",
           isRenewal: true,
           demographics: o.demographics || {},
@@ -227,7 +233,7 @@ export const syncOne = asyncHandler(async (req, res) => {
   if (target === "shopify" || target === "both") {
     try {
       const { data } = await axios.post(
-        REMIX_URL,
+        REMIX_URL(),
         {
           retry: true,
           orderId: order._id.toString(),

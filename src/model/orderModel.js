@@ -1,13 +1,17 @@
 import { Schema, model } from "mongoose";
 
 /* ------------------------------------------------------------------ *
- *  Reusable sync-state sub-document.
- *  Every external sink (Shopify, Sheets) gets one of these so we always
- *  know, per order, whether the side-effect actually landed.
+ *  Reusable sync-state sub-document.  (UNCHANGED)
  *    pending  -> created in DB, not yet pushed
  *    synced   -> confirmed by the sink (Shopify accepted / row appended)
  *    failed   -> push attempted and failed; reconciler will retry
- *    skipped  -> intentionally not pushed (e.g. one_time order, no renewal)
+ *    skipped  -> intentionally not pushed
+ *
+ *  NOTE: `lastAttemptAt` now doubles as an ATOMIC LEASE for the Shopify
+ *  reconciler. A worker "claims" an order by stamping lastAttemptAt in a
+ *  findOneAndUpdate; a second worker's filter (lastAttemptAt < cutoff)
+ *  then fails, so it cannot double-fire the same order. No enum change,
+ *  no new field, no migration.
  * ------------------------------------------------------------------ */
 const syncStateSchema = new Schema(
   {
@@ -55,49 +59,81 @@ const orderSchema = new Schema(
       wehoHearAboutUs: { type: String },
     },
 
-    /* ----- NEW: sync tracking for the FIRST-TIME order ----- *
-     * Renewal cycles are tracked separately in RenewalLog (below),
-     * because each renewal creates its own Shopify order.        */
-    shopifyOrderId: { type: String, default: null }, // first-time Shopify order id
+    shopifyOrderId: { type: String, default: null },
     shopifySync: { type: syncStateSchema, default: () => ({}) },
     sheetSync: { type: syncStateSchema, default: () => ({}) },
+
+    /* ============================================================== *
+     *  ++ ADDED (purely additive — existing docs are unaffected;
+     *     these are all optional and default to null/"") ++
+     *
+     *  Audit trail for the 15-day reminder + unsubscribe flow.
+     *  The CANCEL itself uses fields that already exist:
+     *      subscription -> "one_time", isActive -> false,
+     *      isRenewable  -> false
+     *  ...which is exactly what the renewal cron filters on, so a
+     *  cancelled subscriber is automatically excluded from renewals.
+     *  These three fields only record WHEN + HOW it happened.
+     * ============================================================== */
+    /* ================================================================ *
+     *  ++ DERIVED — DISPLAY ONLY. THE CRON NEVER READS THESE. ++
+     *
+     *  These exist so a human (or a dashboard, or support on the phone)
+     *  can see "when is this customer's next box?" without running code.
+     *
+     *  ⚠ They are NOT a source of truth. `lastRenewAt` is. The crons always
+     *  compute dueAt = lastRenewAt + CYCLE_MONTHS themselves, in Mongo, via
+     *  $dateAdd — they never trust these fields.
+     *
+     *  That's deliberate. Derived data that becomes a SECOND source of truth
+     *  is exactly how you get a customer whose record says "next: Oct 14"
+     *  while the cron thinks otherwise. And if you ever change
+     *  RENEWAL_CYCLE_MONTHS from 3 to 4, every stored value here is instantly
+     *  wrong — but nothing breaks, because nothing depends on them.
+     *
+     *  Written atomically alongside lastRenewAt, every time it moves.
+     * ================================================================ */
+    nextOrderAt: { type: Date, default: null }, // next shipment (derived)
+    nextReminderAt: { type: Date, default: null }, // next email (derived)
+
+    reminderSentAt: { type: Date, default: null }, // last 15-day email
+    unsubscribedAt: { type: Date, default: null }, // when they cancelled
+    unsubscribeSource: { type: String, default: "" }, // "email_link" | "one_click" | "admin"
+
+    /* Set when a NEWER monthly subscription replaced this one (same
+       household or same person). The cron retires the old one and records
+       the winner here, so "why did this stop renewing?" is answerable. */
+    supersededBy: { type: Schema.Types.ObjectId, ref: "Order", default: null },
   },
   { timestamps: true },
 );
 
 /* Indexes that actually back our hot queries ----------------------- */
-// Dedup lookup (most-recent order at an address)
 orderSchema.index({
   normalizedAddress: 1,
   normalizedAddress2: 1,
   createdAt: -1,
 });
-// Cron candidate scan
 orderSchema.index({
   subscription: 1,
   isActive: 1,
   isRenewable: 1,
   lastRenewAt: 1,
 });
-// Reconciler scans
 orderSchema.index({ "shopifySync.status": 1 });
 orderSchema.index({ "sheetSync.status": 1 });
+
+/* ++ ADDED: backs the Shopify reconciler scan (status + lease + cap) ++ */
+orderSchema.index({
+  "shopifySync.status": 1,
+  "shopifySync.lastAttemptAt": 1,
+  "shopifySync.attempts": 1,
+});
 
 export const OrderModel = model("Order", orderSchema);
 
 /* ================================================================== *
- *  RenewalLog — ONE row per (order, renewal-cycle).
- *
- *  This is the duplicate-proof gate for the cron. The unique compound
- *  index on (orderId, cycle) means two concurrent cron runs physically
- *  CANNOT create two renewals for the same cycle — the second insert
- *  throws a duplicate-key error, which we treat as "already handled".
- *
- *  `cycle` = the ISO date (YYYY-MM-DD) we are renewing *from*
- *  (i.e. the order's current lastRenewAt, or createdAt if never renewed).
- *  It is stable across retries of the same due renewal, so a retry maps
- *  to the SAME cycle and is deduped — but advances after a successful
- *  renewal, so next month gets a fresh cycle.
+ *  RenewalLog — ONE row per (order, renewal-cycle).   (UNCHANGED)
  * ================================================================== */
 const renewalLogSchema = new Schema(
   {
@@ -111,7 +147,6 @@ const renewalLogSchema = new Schema(
     shopifyOrderId: { type: String, default: null },
     shopifySync: { type: syncStateSchema, default: () => ({}) },
     sheetSync: { type: syncStateSchema, default: () => ({}) },
-    // Snapshot of what we sent, handy for reconciliation / export
     snapshot: { type: Schema.Types.Mixed, default: null },
   },
   { timestamps: true },
@@ -120,13 +155,13 @@ const renewalLogSchema = new Schema(
 renewalLogSchema.index({ orderId: 1, cycle: 1 }, { unique: true });
 renewalLogSchema.index({ "shopifySync.status": 1 });
 renewalLogSchema.index({ "sheetSync.status": 1 });
+/* ++ ADDED: backs the renewal-retry scan ++ */
+renewalLogSchema.index({ status: 1, "shopifySync.lastAttemptAt": 1 });
 
 export const RenewalLogModel = model("RenewalLog", renewalLogSchema);
 
 /* ================================================================== *
- *  CronLock — a single mutex row so only one cron run executes at a
- *  time even if Render spins up >1 instance or restarts mid-run.
- *  Lease-based: a stale lock (lockedUntil in the past) can be reclaimed.
+ *  CronLock — lease-based mutex.   (UNCHANGED)
  * ================================================================== */
 const cronLockSchema = new Schema(
   {
@@ -138,3 +173,42 @@ const cronLockSchema = new Schema(
 );
 
 export const CronLockModel = model("CronLock", cronLockSchema);
+
+/* ================================================================== *
+ *  ++ NEW: ReminderLog — ONE row per (order, cycle).
+ *
+ *  Same duplicate-proof trick as RenewalLog: the unique compound index
+ *  on (orderId, cycle) means two concurrent reminder runs physically
+ *  CANNOT send two emails for the same cycle — the second insert throws
+ *  E11000, which we treat as "already sent".
+ *
+ *  `cycle` is the SAME key the renewal uses (the ISO date we are
+ *  renewing *from*), so:
+ *     - retrying a failed send maps to the same cycle  -> deduped
+ *     - after a successful renewal, lastRenewAt advances -> new cycle
+ *       -> next month gets a fresh reminder. Exactly one email/cycle.
+ * ================================================================== */
+const reminderLogSchema = new Schema(
+  {
+    orderId: { type: Schema.Types.ObjectId, ref: "Order", required: true },
+    cycle: { type: String, required: true }, // "YYYY-MM-DD" renew-from date
+    kind: { type: String, default: "renewal_15d" },
+    status: {
+      type: String,
+      enum: ["processing", "sent", "failed"],
+      default: "processing",
+    },
+    email: { type: String, default: "" },
+    providerMessageId: { type: String, default: null }, // Resend email id
+    attempts: { type: Number, default: 0 },
+    lastAttemptAt: { type: Date, default: null },
+    lastError: { type: String, default: "" },
+    sentAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+);
+
+reminderLogSchema.index({ orderId: 1, cycle: 1 }, { unique: true });
+reminderLogSchema.index({ status: 1, lastAttemptAt: 1 });
+
+export const ReminderLogModel = model("ReminderLog", reminderLogSchema);

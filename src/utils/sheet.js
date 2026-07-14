@@ -1,31 +1,47 @@
 /* ------------------------------------------------------------------ *
  *  sheetsService.js
  *
- *  Wired to the REAL Google Sheets client (JWT per flag) using the same
- *  spreadsheet layout, headers, and "Orders" tab as appendOrderRow.
+ *  Wired to the REAL Google Sheets client (JWT per flag), same layout,
+ *  headers, and "Orders" tab as appendOrderRow.
  *
- *  What this adds on top of the original single-row appendOrderRow:
- *   - BATCHED writes  : flushPendingSheets() appends many rows in ONE
- *                       values.append call (Sheets allows ~60 writes/min;
- *                       100 renewals as 100 calls would 429 — this is one).
- *   - SYNC TRACKING   : appendSingleAndMark() flips order.sheetSync.
- *   - BACKSTOP        : flushPendingSheets() re-tries anything still
- *                       pending/failed; idempotent (rows flip to synced).
+ *  ++ WHAT CHANGED (and why it matters at 100+ orders/day) ++
  *
- *  Order-doc shape: demographics are NESTED (order.demographics.gender),
- *  unlike the old flat payload — the row builder reads from the doc.
+ *  Google Sheets allows ~60 reads/min and ~60 writes/min per project.
+ *  The old appendRowsBatch() made THREE API calls for every append:
+ *      1. spreadsheets.get        (does the tab exist?)   <- READ
+ *      2. values.get A1:A1        (is there a header?)    <- READ
+ *      3. values.append           (the actual row)        <- WRITE
+ *  Called from appendSingleAndMark() that is 3 calls PER ORDER — and a
+ *  monthly order also hits monthlySheet.js for 3 more. So ~6 calls/order.
+ *  A burst of 15 orders in a minute is already 90 reads: instant 429,
+ *  the append throws, the row is marked "failed", and the customer is
+ *  missing from the sheet until someone notices.
+ *
+ *  FIXES (behaviour identical, exports identical):
+ *   1. MEMOISE the tab/header check per (spreadsheetId, tab). It can only
+ *      ever go from "missing" to "present", so re-checking every append is
+ *      pure waste. -> 3 calls/order becomes 1.
+ *   2. RETRY 429/5xx with exponential backoff + jitter (retry.js).
+ *   3. PACE writes so a backlog flush can't burst into the limit.
  * ------------------------------------------------------------------ */
 
 import { google } from "googleapis";
 import { OrderModel, RenewalLogModel } from "../model/orderModel.js";
+import { withRetry, createPacer } from "./retry.js";
 
 const joinMulti = (v) =>
   Array.isArray(v) ? v.filter(Boolean).join(", ") : v || "";
 
-/* ====== Google auth (lazy + memoized per flag) ====================
- * Lazy so a missing LA credential doesn't crash the whole app before
- * the LA launch — creds are only required when a row for that flag is
- * actually written.                                                   */
+/* ~3 calls/sec — comfortably inside 60/min, and irrelevant once the
+   ensure* calls are cached away. */
+const pacedSheets = createPacer(Number(process.env.SHEETS_PACE_MS || 350));
+
+const call = (fn, label) =>
+  pacedSheets(() =>
+    withRetry(fn, { retries: 5, baseMs: 700, maxMs: 30_000, label }),
+  );
+
+/* ====== Google auth (lazy + memoized per flag) ==================== */
 function parseCreds(envKey) {
   const raw = process.env[envKey];
   if (!raw) throw new Error(`Missing env variable: ${envKey}`);
@@ -78,7 +94,7 @@ function getSheetConfig(flag) {
   };
 }
 
-/* ====== Columns (same as your appendOrderRow) ===================== */
+/* ====== Columns (UNCHANGED) ====================================== */
 function getHeaders(type) {
   const base = [
     "Created ISO",
@@ -114,7 +130,7 @@ function getHeaders(type) {
   ];
 }
 
-/** Build the ordered row ARRAY from an order DOC (nested demographics). */
+/** Build the ordered row ARRAY from an order DOC. (UNCHANGED) */
 function orderToRow(order, type, when) {
   const d = order.demographics || {};
   const city = type === "LA" ? "Los Angeles" : "West Hollywood";
@@ -160,40 +176,66 @@ function orderToRow(order, type, when) {
   ];
 }
 
-async function ensureSheetExists(sheets, spreadsheetId, sheetTitle) {
-  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+/* ++ ADDED: memoise the tab/header check. A tab that exists cannot stop
+   existing; a header that's written stays written. Re-verifying on every
+   append is what was silently eating the read quota. ++ */
+const _ensured = new Set(); // `${spreadsheetId}::${sheetTitle}`
+
+async function ensureTabAndHeader(sheets, spreadsheetId, sheetTitle, headers) {
+  const key = `${spreadsheetId}::${sheetTitle}`;
+  if (_ensured.has(key)) return; // <- the whole optimisation
+
+  const meta = await call(
+    () => sheets.spreadsheets.get({ spreadsheetId }),
+    "sheets:get",
+  );
   const exists = meta.data.sheets?.some(
     (s) => s.properties?.title === sheetTitle,
   );
-  if (exists) return;
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [{ addSheet: { properties: { title: sheetTitle } } }],
-    },
-  });
-}
 
-async function ensureHeaderRow(sheets, spreadsheetId, sheetTitle, headers) {
-  const read = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `'${sheetTitle}'!A1:A1`,
-  });
+  if (!exists) {
+    await call(
+      () =>
+        sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            requests: [{ addSheet: { properties: { title: sheetTitle } } }],
+          },
+        }),
+      "sheets:addSheet",
+    );
+  }
+
+  const read = await call(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${sheetTitle}'!A1:A1`,
+      }),
+    "sheets:headerGet",
+  );
   const hasHeader =
     Array.isArray(read.data.values) && read.data.values.length > 0;
-  if (hasHeader) return;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `'${sheetTitle}'!A1`,
-    valueInputOption: "RAW",
-    requestBody: { values: [headers] },
-  });
+
+  if (!hasHeader) {
+    await call(
+      () =>
+        sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `'${sheetTitle}'!A1`,
+          valueInputOption: "RAW",
+          requestBody: { values: [headers] },
+        }),
+      "sheets:headerWrite",
+    );
+  }
+
+  _ensured.add(key);
 }
 
 /* ------------------------------------------------------------------ *
  *  appendRowsBatch — append MANY order docs in ONE API call.
- *  entries: [{ order, when? }]  (all same flag)
- *  ensure* run once per batch, not per row.
+ *  Signature UNCHANGED.  entries: [{ order, when? }]  (all same flag)
  * ------------------------------------------------------------------ */
 export async function appendRowsBatch(entries, flag) {
   if (!entries.length) return { appended: 0 };
@@ -204,28 +246,31 @@ export async function appendRowsBatch(entries, flag) {
     orderToRow(order, type, when),
   );
 
-  await ensureSheetExists(sheets, spreadsheetId, sheetTitle);
-  await ensureHeaderRow(sheets, spreadsheetId, sheetTitle, headers);
+  await ensureTabAndHeader(sheets, spreadsheetId, sheetTitle, headers);
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `'${sheetTitle}'!A1`,
-    valueInputOption: "RAW",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: { values },
-  });
+  await call(
+    () =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `'${sheetTitle}'!A1`,
+        valueInputOption: "RAW",
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values },
+      }),
+    "sheets:append",
+  );
 
   return { appended: values.length };
 }
 
-/** Single append from an order doc — convenience/back-compat. */
+/** Single append from an order doc — convenience/back-compat. UNCHANGED. */
 export async function appendOrderRow(order, flag) {
   return appendRowsBatch([{ order, when: order.createdAt }], flag);
 }
 
 /* ------------------------------------------------------------------ *
- *  appendSingleAndMark — first-time intake path. Best-effort; the
- *  flush is the guarantee. Never throws (failures become retryable).
+ *  appendSingleAndMark — first-time intake path. Best-effort; the flush
+ *  is the guarantee. Never throws. UNCHANGED behaviour.
  * ------------------------------------------------------------------ */
 export async function appendSingleAndMark(order, flag) {
   try {
@@ -246,19 +291,24 @@ export async function appendSingleAndMark(order, flag) {
       {
         $set: {
           "sheetSync.status": "failed",
-          "sheetSync.lastError": e?.message || "sheet append failed",
+          "sheetSync.lastError": String(
+            e?.message || "sheet append failed",
+          ).slice(0, 500),
           "sheetSync.lastAttemptAt": new Date(),
         },
         $inc: { "sheetSync.attempts": 1 },
       },
     );
+    // Not fatal: reconcileCron flushes every 10 minutes, so the row lands
+    // shortly after even if Sheets was rate-limiting us at intake time.
+    console.error("[sheets] intake append failed (will flush):", e?.message);
   }
 }
 
 /* ------------------------------------------------------------------ *
- *  flushPendingSheets — THE BACKSTOP.
- *  Batches every pending/failed first-time order + completed-but-unsynced
- *  renewal cycle into per-flag append calls. Idempotent.
+ *  flushPendingSheets — THE BACKSTOP. Batches every pending/failed
+ *  first-time order + completed-but-unsynced renewal cycle into per-flag
+ *  append calls. Idempotent. Signature UNCHANGED.
  * ------------------------------------------------------------------ */
 export async function flushPendingSheets({ limit = 500 } = {}) {
   const summary = { firstTime: 0, renewals: 0, failedBatches: 0 };

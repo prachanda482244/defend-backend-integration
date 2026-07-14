@@ -1,96 +1,112 @@
 // utils/addressValidation.js
 import { normalizeAddress } from "./normalizeAddress.js";
 
-const CENSUS_URL =
-  "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress";
+/* ==================================================================== *
+ *  ADDRESS VALIDATION — municipality-based, NOT zip-based.
+ *
+ *  ── THE RULE ────────────────────────────────────────────────────────
+ *  Ask Census what city the ADDRESS is actually in. Decide on that.
+ *  The ZIP the customer typed is never part of the decision — it is only
+ *  a hint we pass to Census to help it find the address, and if the hint
+ *  is wrong we drop it and ask again.
+ *
+ *      Defent WEHO  ->  must be in the City of West Hollywood.
+ *      Defent LA    ->  must be in the City of Los Angeles.
+ *
+ *  ── WHY ZIP CANNOT WORK ─────────────────────────────────────────────
+ *  ZIPs are USPS delivery routes. They do not respect city boundaries.
+ *  90046 covers a large slice of the City of LA (Hollywood Hills, Laurel
+ *  Canyon) AND part of West Hollywood. 90048 straddles WeHo and LA's
+ *  Beverly Grove. 90038 is mostly Hollywood, i.e. City of LA.
+ *
+ *  So "zip in {90038,90046,90048,90069}" lets City-of-LA residents into
+ *  the West Hollywood program. There is already an example in the DB:
+ *      "1725 CAMINO PALMERO ST, ..., 90046"
+ *  Camino Palmero is in Hollywood = City of Los Angeles, not West
+ *  Hollywood. It passed only because 90046 is on the allowed list.
+ *
+ *  ── WHAT WE USE INSTEAD ─────────────────────────────────────────────
+ *  Census's `geographies` endpoint returns an "Incorporated Places"
+ *  layer — the actual municipal boundary the address falls inside:
+ *
+ *      Incorporated Places: { NAME: "West Hollywood city", GEOID: ... }
+ *      Incorporated Places: { NAME: "Los Angeles city",    GEOID: ... }
+ *
+ *  West Hollywood is a separate incorporated city (since 1984) and has
+ *  never been part of the City of Los Angeles — so this layer answers
+ *  the question exactly. `geographies` also returns everything the old
+ *  `locations` endpoint returned, so this is still ONE call, not two.
+ *
+ *  (The old code deliberately trusted ZIP over Census's `city` field
+ *   because that field is a POSTAL city name and does mislabel WeHo
+ *   addresses. That was a fair workaround. Incorporated Places is a
+ *   different field: a boundary, not a mailing label.)
+ * ==================================================================== */
 
-const ALLOWED_ZIPS = new Set(["90038", "90046", "90048", "90069"]);
+const CENSUS_BASE = "https://geocoding.geo.census.gov/geocoder";
 
-const LA_ZIPS = new Set([
-  "90001",
-  "90002",
-  "90003",
-  "90004",
-  "90005",
-  "90006",
-  "90007",
-  "90008",
-  "90010",
-  "90011",
-  "90012",
-  "90013",
-  "90014",
-  "90015",
-  "90016",
-  "90017",
-  "90018",
-  "90019",
-  "90020",
-  "90021",
-  "90022",
-  "90023",
-  "90024",
-  "90025",
-  "90026",
-  "90027",
-  "90028",
-  "90029",
-  "90031",
-  "90032",
-  "90033",
-  "90034",
-  "90035",
-  "90036",
-  "90037",
-  "90038",
-  "90039",
-  "90040",
-  "90041",
-  "90042",
-  "90043",
-  "90044",
-  "90045",
-  "90046",
-  "90047",
-  "90048",
-  "90049",
-  "90056",
-  "90057",
-  "90058",
-  "90059",
-  "90061",
-  "90062",
-  "90063",
-  "90064",
-  "90065",
-  "90066",
-  "90067",
-  "90068",
-  "90069",
-  "90071",
-  "90073",
-  "90077",
-  "90089",
-  "90094",
-  "90095",
-]);
+/* Current address ranges + current municipal boundaries. */
+const BENCHMARK = process.env.CENSUS_BENCHMARK || "Public_AR_Current";
+const VINTAGE = process.env.CENSUS_VINTAGE || "Current_Current";
+const CENSUS_TIMEOUT_MS = Number(process.env.CENSUS_TIMEOUT_MS || 8000);
+
+/* Fail CLOSED when Census can't be reached. An address nobody verified
+   does not get a free device. Turn on only during a long outage. */
+const ALLOW_UNVERIFIED = process.env.ALLOW_UNVERIFIED_ADDRESS === "true";
+
+/* Target municipalities. Compared case-insensitively after stripping the
+   Census suffix ("West Hollywood city" -> "west hollywood"). */
+const WEHO_PLACE = (process.env.WEHO_PLACE || "West Hollywood").toLowerCase();
+const LA_PLACE = (process.env.LA_PLACE || "Los Angeles").toLowerCase();
+
+/* Kept ONLY as a safety net for the rare case where Census returns a
+   match with no Incorporated Places layer. Never the primary check. */
+const WEHO_ZIPS = new Set(["90038", "90046", "90048", "90069"]);
+
+/* Rough LA-County box. Rejects a same-named street elsewhere in
+   California when we have had to drop the city from the query. */
+const LA_BOX = { minLat: 33.6, maxLat: 34.9, minLon: -118.95, maxLon: -117.6 };
+
+/* ---- Census place-name suffix stripping ---------------------------- *
+ * Census formats place names as "<Name> city" / "<Name> town" / etc.
+ * Verified against live responses: "Washington city", "New York city",
+ * "Westminster city", "Duncan town".                                    */
+function normalizePlaceName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/\s+(city|town|village|borough|municipality|cdp)$/, "")
+    .trim();
+}
+
+const houseNumberOf = (s) =>
+  (String(s || "")
+    .trim()
+    .match(/^(\d+)/) || [])[1] || null;
 
 /**
- * Calls the US Census geocoder.
- * Returns { ok: true, normalized, components, coordinates } on a hit,
- *         { ok: false, reason } otherwise.
+ * ONE Census call. Returns everything needed to decide.
+ *
+ *   { ok: true,
+ *     normalized,                    // "1725 CAMINO PALMERO ST, LOS ANGELES, CA, 90046"
+ *     components: {city,state,zip5}, // Census's POSTAL city + zip
+ *     place,                         // "los angeles"  <- THE MUNICIPALITY. This decides.
+ *     placeRaw,                      // "Los Angeles city"
+ *     placeGeoid,
+ *     coordinates: {x,y} }
+ *
+ *   { ok: false, reason: "not_found" | "timeout" | "network_error" | "http_5xx" }
  */
-export async function validateUSAddress(oneLine) {
-  const url = new URL(CENSUS_URL);
+export async function geocodeCensus(oneLine, { wantHouseNumber = null } = {}) {
+  const url = new URL(`${CENSUS_BASE}/geographies/onelineaddress`);
   url.search = new URLSearchParams({
     address: oneLine,
-    benchmark: "Public_AR_Census2020",
+    benchmark: BENCHMARK,
+    vintage: VINTAGE,
     format: "json",
   });
 
-  // Native fetch ignores { timeout }, so use AbortController for a real timeout.
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
+  const timer = setTimeout(() => ctrl.abort(), CENSUS_TIMEOUT_MS);
 
   let r;
   try {
@@ -106,25 +122,48 @@ export async function validateUSAddress(oneLine) {
 
   if (!r.ok) return { ok: false, reason: "http_" + r.status };
 
-  const data = await r.json();
-  const match = data?.result?.addressMatches?.[0];
-  if (!match) return { ok: false, reason: "not_found" };
+  let data;
+  try {
+    data = await r.json();
+  } catch {
+    return { ok: false, reason: "network_error" };
+  }
 
-  const comp = match.addressComponents || {};
-  const zip5 = String(comp.zip || "").slice(0, 5);
-  const city = comp.city || "";
-  const state = comp.state || "";
-  const normalized = match.matchedAddress || "";
+  const matches = data?.result?.addressMatches || [];
+  if (!matches.length) return { ok: false, reason: "not_found" };
+
+  /* Census can return several matches (e.g. "1600 Pennsylvania Ave" gives
+     both the NW and the SE one). Prefer the match whose house number is
+     the one the customer actually typed. */
+  const best =
+    (wantHouseNumber &&
+      matches.find(
+        (m) => houseNumberOf(m.matchedAddress) === wantHouseNumber,
+      )) ||
+    matches[0];
+
+  const comp = best.addressComponents || {};
+  const geo = best.geographies || {};
+  const placeRow = geo["Incorporated Places"]?.[0] || null;
 
   return {
     ok: true,
-    normalized,
-    components: { city, state, zip5 },
-    coordinates: match.coordinates || null,
+    normalized: best.matchedAddress || "",
+    components: {
+      city: comp.city || "",
+      state: comp.state || "",
+      zip5: String(comp.zip || "").slice(0, 5),
+    },
+    place: normalizePlaceName(placeRow?.NAME), // <- the decision field
+    placeRaw: placeRow?.NAME || "",
+    placeGeoid: placeRow?.GEOID || "",
+    coordinates: best.coordinates || null,
   };
 }
 
-// Looks like a real US street line: leading house number + a street-type word.
+/* Back-compat: old export name, same contract, richer payload. */
+export const validateUSAddress = (oneLine) => geocodeCensus(oneLine);
+
 function looksLikeStreetAddress(line1) {
   const s = String(line1 || "")
     .trim()
@@ -137,142 +176,186 @@ function looksLikeStreetAddress(line1) {
   return hasHouseNumber && hasStreetType;
 }
 
-/**
- * Wraps validateUSAddress with safe fallback handling.
+function inLAArea(coords) {
+  if (!coords) return false;
+  const lon = coords.x;
+  const lat = coords.y;
+  return (
+    lat >= LA_BOX.minLat &&
+    lat <= LA_BOX.maxLat &&
+    lon >= LA_BOX.minLon &&
+    lon <= LA_BOX.maxLon
+  );
+}
+
+/* Dedup key, Census-shaped, identical on every code path. */
+const censusShaped = ({ line1, city, zip5 }) =>
+  `${line1}, ${city}, CA, ${zip5}`.toUpperCase();
+
+/* ==================================================================== *
+ *  validateAddressWithZipFallback(oneLine, { postCode, isLA, city, line1 })
  *
- * CRITICAL FIX (this is what stops the "806 E 80th St + 90069" bug):
+ *  Name kept so the controller's import doesn't change — but it is no
+ *  longer a "zip fallback". It is an escalating geocode, and the typed
+ *  ZIP never decides anything.
  *
- *   - "not_found" is no longer treated as recoverable. If Census looked
- *     and didn't find the address, we trust that NEGATIVE answer and
- *     reject. The old code did the opposite — it forgave not_found and
- *     accepted on the user's typed ZIP, which is exactly how a bad
- *     South-LA street got paired with a West Hollywood ZIP.
+ *  ESCALATION (stop at the first hit):
+ *    1. "<line1>, <city>, CA <zip>"   full hint — best hit rate
+ *    2. "<line1>, <city>, CA"         drop the ZIP  -> handles "address
+ *                                     is right, customer typed a bad ZIP"
+ *    3. "<line1>, CA"                 drop the city -> handles Census
+ *                                     parser quirks with city names
  *
- *   - Only transient failures (timeout / network error / 5xx) are
- *     considered recoverable.
- *
- *   - Even on a transient failure, we DO NOT trust the user's typed ZIP.
- *     We retry Census with just "<street>, CA" (no city, no ZIP) and
- *     accept ONLY if Census itself returns a ZIP that is in our
- *     service area. If Census returns a different ZIP -> reject as a
- *     zip_mismatch. If the retry also fails transiently -> accept but
- *     mark needsReview so the order can be held for manual review.
- *
- * @param {string} oneLine  e.g. "8500 Santa Monica Blvd, West Hollywood, CA 90069"
- * @param {object} opts
- * @param {string} opts.postCode  raw postCode from the request
- * @param {boolean} opts.isLA     true when flag === "defentLA"
- * @param {string} opts.city      city string used to build oneLine
- * @param {string} opts.line1     raw street line from the request
- */
+ *  Whatever hits, the DECISION is made on `place` (Incorporated Places).
+ * ==================================================================== */
 export async function validateAddressWithZipFallback(
   oneLine,
   { postCode, isLA, city, line1 },
 ) {
-  const v = await validateUSAddress(oneLine);
-  if (v.ok) return v;
-
-  // Only forgive Census being temporarily unreachable.
-  // "not_found" is a real negative answer — do NOT recover from it.
-  const recoverable =
-    v.reason === "timeout" ||
-    v.reason === "network_error" ||
-    (typeof v.reason === "string" && v.reason.startsWith("http_5"));
-
-  if (!recoverable) return v;
-
-  // Don't fall back for input that isn't even shaped like a street address.
-  if (!looksLikeStreetAddress(line1)) return v;
-
   const zip5 = String(postCode || "").slice(0, 5);
-  const expectedZipSet = isLA ? LA_ZIPS : ALLOWED_ZIPS;
-  if (!expectedZipSet.has(zip5)) return v;
+  const wantNum = houseNumberOf(line1);
 
-  // Independent confirmation: ask Census what ZIP this STREET is in,
-  // without telling it the city or ZIP. If Census can answer and the
-  // returned ZIP isn't in our area, reject.
-  const retry = await validateUSAddress(`${line1}, CA`);
-  if (retry.ok) {
-    if (!expectedZipSet.has(retry.components.zip5)) {
-      // Census found this street — at a DIFFERENT ZIP. Bad address.
-      return {
-        ok: false,
-        reason: "zip_mismatch",
-        components: retry.components,
-      };
+  const attempts = [
+    oneLine, // as the caller built it: "line1, city, CA zip"
+    `${line1}, ${city}, CA`, // no ZIP
+    `${line1}, CA`, // no ZIP, no city
+  ];
+
+  let hit = null;
+  let lastFail = null;
+
+  for (let i = 0; i < attempts.length; i += 1) {
+    const res = await geocodeCensus(attempts[i], { wantHouseNumber: wantNum });
+
+    if (!res.ok) {
+      lastFail = res;
+      // Transient failure means Census is unwell — escalating won't help.
+      if (res.reason !== "not_found") break;
+      continue; // not_found -> try a looser query
     }
-    // Census found it and the ZIP IS in our area — trust Census's answer.
-    return retry;
+
+    /* Attempt 3 carries no city hint, so a same-named street elsewhere in
+       California could match. Require it to at least be in the LA area. */
+    if (i === 2 && !inLAArea(res.coordinates)) {
+      lastFail = { ok: false, reason: "not_found" };
+      continue;
+    }
+
+    hit = res;
+    break;
   }
 
-  // Both Census calls failed transiently. Conservative accept, but
-  // flag for review so the controller can hold sync.
-  return {
-    ok: true,
-    fallback: true,
-    needsReview: true,
-    normalized: oneLine.toUpperCase(),
-    components: {
-      city: city || (isLA ? "Los Angeles" : "West Hollywood"),
-      state: "CA",
-      zip5,
-    },
-    coordinates: null,
-  };
+  if (!hit) {
+    const reason = lastFail?.reason || "not_found";
+    const transient = reason !== "not_found";
+
+    if (!transient) return { ok: false, reason: "not_found" };
+
+    /* Census unreachable. FAIL CLOSED — we will not guess at someone's
+       address using a ZIP they typed themselves. */
+    if (!ALLOW_UNVERIFIED || !looksLikeStreetAddress(line1)) {
+      return { ok: false, reason: "unverifiable", transient: true };
+    }
+
+    /* Escape hatch: accept but flag. createOrder HOLDS these (see the
+       needsReview guard there) — nothing ships unverified. */
+    return {
+      ok: true,
+      fallback: true,
+      needsReview: true,
+      normalized: censusShaped({ line1, city, zip5 }),
+      components: { city, state: "CA", zip5 },
+      place: "",
+      placeRaw: "",
+      coordinates: null,
+    };
+  }
+
+  /* Census matched — but is it the building they typed? Census geocodes
+     against TIGER street RANGES and is documented as forgiving with
+     non-standard input, so a match does not by itself mean it matched
+     YOUR house number. */
+  const gotNum = houseNumberOf(hit.normalized);
+  if (wantNum && gotNum && wantNum !== gotNum) {
+    return {
+      ok: false,
+      reason: "house_number_mismatch",
+      matched: hit.normalized,
+      components: hit.components,
+    };
+  }
+
+  return hit;
 }
 
-// Service-area gate. Trusts state + ZIP because the Census geocoder
-// frequently mislabels West Hollywood addresses as "Los Angeles".
-export function isWestHollywoodOK(components) {
-  const stateOK = (components.state || "").toUpperCase() === "CA";
-  const zipOK = ALLOWED_ZIPS.has(components.zip5 || "");
-  return stateOK && zipOK;
+/* ==================================================================== *
+ *  SERVICE-AREA GATES — the ADDRESS decides, not the ZIP.
+ *
+ *  Accepts the full result object (preferred), or a bare `components`
+ *  object for any legacy caller.
+ * ==================================================================== */
+function gate(result, targetPlace, zipSafetyNet) {
+  if (!result) return false;
+
+  // Full result -> use the municipality. This is the real check.
+  if (typeof result.place === "string" && result.place) {
+    return result.place === targetPlace;
+  }
+
+  /* No Incorporated Places layer came back (unincorporated land, or a
+     response shape we didn't expect). Rather than silently accept, fall
+     back to the OLD state+zip behaviour. The controller logs this so you
+     can see how often it actually happens — expected: almost never. */
+  const c = result.components || result;
+  const stateOK = String(c?.state || "").toUpperCase() === "CA";
+  if (!stateOK) return false;
+  return zipSafetyNet ? zipSafetyNet(String(c?.zip5 || "")) : false;
 }
 
-export function isLosAngelesOK(components) {
-  const stateOK = (components.state || "").toUpperCase() === "CA";
-  const zipOK = LA_ZIPS.has(components.zip5 || "");
-  return stateOK && zipOK;
+export function isWestHollywoodOK(result) {
+  return gate(result, WEHO_PLACE, (z) => WEHO_ZIPS.has(z));
 }
 
-// Strict variants kept available if you ever want exact-city enforcement.
-export function isWestHollywoodStrict(components) {
-  const cityOK = (components.city || "").toLowerCase() === "west hollywood";
-  return cityOK && isWestHollywoodOK(components);
+/* City of Los Angeles. Your FAQ says "FREE DEFENT ONE PROGRAM · CITY OF
+   LOS ANGELES", so the City is the correct boundary — not LA County, and
+   not all of California. Override with LA_PLACE if that ever changes. */
+export function isLosAngelesOK(result) {
+  return gate(result, LA_PLACE, () => false);
 }
 
-export function isLosAngelesStrict(components) {
-  const cityOK = (components.city || "").toLowerCase() === "los angeles";
-  return cityOK && isLosAngelesOK(components);
+/* The old "strict" variants added a POSTAL-city check on top of ZIP. The
+   main gates are municipality-based now, so strict === normal. Kept as
+   aliases so nothing that imports them breaks. */
+export const isWestHollywoodStrict = isWestHollywoodOK;
+export const isLosAngelesStrict = isLosAngelesOK;
+
+/* Human-readable reason, for the customer message and the error log. */
+export function serviceAreaReason(result, isLA) {
+  const want = isLA ? "Los Angeles" : "West Hollywood";
+  if (!result?.placeRaw) {
+    return `Could not determine the city for this address (expected ${want}).`;
+  }
+  return `That address is in ${result.placeRaw}, not the City of ${want}.`;
 }
 
-// More strict version that catches addresses that are too similar
+// --------------------------------------------------------------------
 export function areAddressLinesSame(line1, line2) {
   if (!line2) return false;
 
-  const normalizedLine1 = normalizeAddress(line1);
-  const normalizedLine2 = normalizeAddress(line2);
+  const a = normalizeAddress(line1);
+  const b = normalizeAddress(line2);
+  if (a === b) return true;
 
-  // Direct equality check
-  if (normalizedLine1 === normalizedLine2) return true;
-
-  // Additional checks for common variations
-  const removeCommonPrefixes = (str) => {
-    return str
+  const strip = (str) =>
+    str
       .replace(/^(apt|apartment|unit|suite|ste|#|no|number)\s*/g, "")
-      .replace(/^\d+\s*/g, ""); // Remove leading unit numbers
-  };
+      .replace(/^\d+\s*/g, "");
 
-  const cleanLine1 = removeCommonPrefixes(normalizedLine1);
-  const cleanLine2 = removeCommonPrefixes(normalizedLine2);
+  const ca = strip(a);
+  const cb = strip(b);
 
-  // Check if one contains the other (with some length threshold)
-  const minLength = Math.min(cleanLine1.length, cleanLine2.length);
-  if (minLength > 5) {
-    if (cleanLine1.includes(cleanLine2) || cleanLine2.includes(cleanLine1)) {
-      return true;
-    }
+  if (Math.min(ca.length, cb.length) > 5) {
+    if (ca.includes(cb) || cb.includes(ca)) return true;
   }
-
   return false;
 }

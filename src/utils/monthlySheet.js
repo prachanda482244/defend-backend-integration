@@ -1,41 +1,51 @@
 /* ------------------------------------------------------------------ *
- *  monthlySheet.js   (NEW FEATURE — fully self-contained)
+ *  monthlySheet.js
  *
- *  Mirrors MONTHLY subscriptions into ONE consolidated Google Sheet,
- *  in addition to (and without touching) the existing Weho/LA sheets.
+ *  Mirrors MONTHLY subscriptions into ONE consolidated Google Sheet, in
+ *  addition to (and without touching) the existing Weho/LA sheets.
  *
- *  >>> NO changes to OrderModel. <<<
+ *  >>> Still NO changes to how OrderModel is used here. <<<
  *  Idempotency is handled by the SHEET itself: every row carries the
  *  Mongo "Order ID" in column A. The backfill reads the IDs already in
- *  the sheet and skips them — so it never writes duplicates, and the
- *  order model (shared with your other service) is left exactly as-is.
+ *  the sheet and skips them — so it never writes duplicates.
  *
- *  Exports:
- *    appendMonthly(order)      -> live append for a new monthly order
- *    backfillMonthlySheet()    -> push EXISTING monthly orders (idempotent)
+ *  ++ WHAT CHANGED ++
+ *   1. Tab/header check is now MEMOISED (it was 2 extra Sheets reads on
+ *      every single monthly order — see the note in sheet.js).
+ *   2. All Sheets calls go through withRetry (429 / 5xx backoff).
+ *   3. appendMonthly() no longer silently loses a row on failure: the
+ *      Order ID simply isn't in column A, so the next backfill pass
+ *      (now run automatically by reconcileCron) picks it up. Same
+ *      contract as before, just actually self-healing now.
  *
  *  ENV:
  *    SPREADSHEET_ID_MONTHLY     = the new sheet's ID (required)
- *    GOOGLE_CREDENTIALS_MONTHLY = (optional) dedicated SA; if omitted,
- *                                 reuses GOOGLE_CREDENTIALS_WEHO.
+ *    GOOGLE_CREDENTIALS_WEHO    = service-account JSON (reused)
  *    MONTHLY_SHEET_TAB          = tab name (optional, default "Monthly")
  *
  *  IMPORTANT: share the new sheet with the service-account email
- *  (Weho SA: spreadsheet@spreadsheet-474509.iam.gserviceaccount.com)
- *  as EDITOR, or every write returns 403.
+ *  (spreadsheet@spreadsheet-474509.iam.gserviceaccount.com) as EDITOR,
+ *  or every write returns 403.
  * ------------------------------------------------------------------ */
 
 import { google } from "googleapis";
+import { RECURRING_MATCH } from "./cycle.js";
 import { OrderModel } from "../model/orderModel.js"; // READ ONLY — never modified
+import { withRetry, createPacer } from "./retry.js";
 
 const SHEET_TAB = process.env.MONTHLY_SHEET_TAB || "Monthly";
 
 const joinMulti = (v) =>
   Array.isArray(v) ? v.filter(Boolean).join(", ") : v || "";
 
+const pacedSheets = createPacer(Number(process.env.SHEETS_PACE_MS || 350));
+const call = (fn, label) =>
+  pacedSheets(() =>
+    withRetry(fn, { retries: 5, baseMs: 700, maxMs: 30_000, label }),
+  );
+
 /* ---- auth (lazy + memoized) ------------------------------------- */
 function parseCreds() {
-  // Reuse the Weho service account unless a dedicated one is provided.
   const envKey = "GOOGLE_CREDENTIALS_WEHO";
   const raw = process.env[envKey];
   if (!raw) throw new Error(`Missing env variable: ${envKey}`);
@@ -68,6 +78,13 @@ function getConfig() {
     spreadsheetId: process.env.SPREADSHEET_ID_MONTHLY,
     sheetTitle: SHEET_TAB,
   };
+}
+
+/** True when the consolidated monthly sheet is configured. */
+export function monthlySheetReady() {
+  return Boolean(
+    process.env.SPREADSHEET_ID_MONTHLY && process.env.GOOGLE_CREDENTIALS_WEHO,
+  );
 }
 
 /* ---- columns (Order ID first → enables sheet-based dedup) ------- */
@@ -130,45 +147,73 @@ function orderToRow(order, when) {
   ];
 }
 
-/* ---- ensure tab + header (runs once per batch) ------------------ */
-async function ensureSheetExists(sheets, spreadsheetId, sheetTitle) {
-  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+/* ---- ensure tab + header (MEMOISED — see sheet.js) -------------- */
+const _ensured = new Set();
+
+async function ensureTabAndHeader(sheets, spreadsheetId, sheetTitle, headers) {
+  const key = `${spreadsheetId}::${sheetTitle}`;
+  if (_ensured.has(key)) return;
+
+  const meta = await call(
+    () => sheets.spreadsheets.get({ spreadsheetId }),
+    "monthly:get",
+  );
   const exists = meta.data.sheets?.some(
     (s) => s.properties?.title === sheetTitle,
   );
-  if (exists) return;
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [{ addSheet: { properties: { title: sheetTitle } } }],
-    },
-  });
-}
+  if (!exists) {
+    await call(
+      () =>
+        sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            requests: [{ addSheet: { properties: { title: sheetTitle } } }],
+          },
+        }),
+      "monthly:addSheet",
+    );
+  }
 
-async function ensureHeaderRow(sheets, spreadsheetId, sheetTitle, headers) {
-  const read = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `'${sheetTitle}'!A1:A1`,
-  });
+  const read = await call(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${sheetTitle}'!A1:A1`,
+      }),
+    "monthly:headerGet",
+  );
   const hasHeader =
     Array.isArray(read.data.values) && read.data.values.length > 0;
-  if (hasHeader) return;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `'${sheetTitle}'!A1`,
-    valueInputOption: "RAW",
-    requestBody: { values: [headers] },
-  });
+  if (!hasHeader) {
+    await call(
+      () =>
+        sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `'${sheetTitle}'!A1`,
+          valueInputOption: "RAW",
+          requestBody: { values: [headers] },
+        }),
+      "monthly:headerWrite",
+    );
+  }
+
+  _ensured.add(key);
 }
 
 /* ---- read Order IDs already in the sheet (idempotency key) ------ */
 async function getExistingOrderIds() {
   const { sheets, spreadsheetId, sheetTitle } = getConfig();
-  await ensureSheetExists(sheets, spreadsheetId, sheetTitle);
-  const read = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `'${sheetTitle}'!A2:A`, // column A, skip header
-  });
+  await ensureTabAndHeader(sheets, spreadsheetId, sheetTitle, getHeaders());
+
+  const read = await call(
+    () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${sheetTitle}'!A2:A`, // column A, skip header
+      }),
+    "monthly:idScan",
+  );
+
   const ids = new Set();
   for (const row of read.data.values || []) {
     if (row[0]) ids.add(String(row[0]).trim());
@@ -183,43 +228,51 @@ export async function appendMonthlyRowsBatch(entries) {
   const headers = getHeaders();
   const values = entries.map(({ order, when }) => orderToRow(order, when));
 
-  await ensureSheetExists(sheets, spreadsheetId, sheetTitle);
-  await ensureHeaderRow(sheets, spreadsheetId, sheetTitle, headers);
+  await ensureTabAndHeader(sheets, spreadsheetId, sheetTitle, headers);
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `'${sheetTitle}'!A1`,
-    valueInputOption: "RAW",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: { values },
-  });
+  await call(
+    () =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `'${sheetTitle}'!A1`,
+        valueInputOption: "RAW",
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values },
+      }),
+    "monthly:append",
+  );
+
   return { appended: values.length };
 }
 
-/* ---- live path: append a single new monthly order --------------
+/* ---- live path: append a single new monthly order ---------------
  * Best-effort: NEVER throws, so it can't break order creation.
- * No DB write → OrderModel untouched. If it fails, the backfill is
- * the backstop (this order's ID won't be in the sheet, so a later
- * sync picks it up).                                                 */
+ * If it fails, the order's ID is simply absent from column A, and the
+ * automatic backfill (reconcileCron, every 10 min) picks it up.       */
 export async function appendMonthly(order) {
+  if (!monthlySheetReady()) return;
   try {
     await appendMonthlyRowsBatch([{ order, when: order.createdAt }]);
   } catch (e) {
-    console.error("[monthlySheet] live append failed:", e?.message);
+    console.error(
+      "[monthlySheet] live append failed (backfill will heal):",
+      e?.message,
+    );
   }
 }
 
 /* ---- backfill: push EXISTING monthly orders from the DB ---------
- * Idempotent via the sheet's Order ID column: orders already present
- * are skipped. Re-run until `remaining` is 0. Nothing in the DB is
- * modified.                                                          */
+ * Idempotent via the sheet's Order ID column. Nothing in the DB is
+ * modified. Safe to run on a schedule — this is now the self-healing
+ * backstop for any live append that lost a race with a 429.           */
 export async function backfillMonthlySheet({ limit = 1000 } = {}) {
+  if (!monthlySheetReady()) {
+    return { appended: 0, remaining: 0, alreadyInSheet: 0, skipped: true };
+  }
+
   const existing = await getExistingOrderIds();
 
-  const monthly = await OrderModel.find({
-    subscription: "monthly",
-    // add `isActive: true,` here if you only want ACTIVE subscriptions
-  })
+  const monthly = await OrderModel.find({ subscription: RECURRING_MATCH })
     .sort({ createdAt: 1 })
     .lean();
 
@@ -230,12 +283,22 @@ export async function backfillMonthlySheet({ limit = 1000 } = {}) {
     return { appended: 0, remaining: 0, alreadyInSheet: existing.size };
   }
 
-  const entries = todo.map((o) => ({ order: o, when: o.createdAt }));
-  await appendMonthlyRowsBatch(entries); // one API call for the batch
+  /* Chunk the write. Sheets will happily take thousands of rows in one
+     append, but a single monster request is also a single point of
+     failure — 500 at a time keeps a transient error cheap to retry. */
+  const CHUNK = 500;
+  let appended = 0;
+  for (let i = 0; i < todo.length; i += CHUNK) {
+    const slice = todo.slice(i, i + CHUNK);
+    await appendMonthlyRowsBatch(
+      slice.map((o) => ({ order: o, when: o.createdAt })),
+    );
+    appended += slice.length;
+  }
 
   return {
-    appended: todo.length,
-    remaining: notInSheet.length - todo.length,
+    appended,
+    remaining: notInSheet.length - appended,
     alreadyInSheet: existing.size,
   };
 }
