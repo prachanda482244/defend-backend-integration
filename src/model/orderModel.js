@@ -60,6 +60,9 @@ const orderSchema = new Schema(
     },
 
     shopifyOrderId: { type: String, default: null },
+    /* Human order number Shopify shows customers, e.g. "#4232".
+       Purely additive — used by the "order on the way" email. */
+    shopifyOrderName: { type: String, default: "" },
     shopifySync: { type: syncStateSchema, default: () => ({}) },
     sheetSync: { type: syncStateSchema, default: () => ({}) },
 
@@ -145,6 +148,7 @@ const renewalLogSchema = new Schema(
       default: "processing",
     },
     shopifyOrderId: { type: String, default: null },
+    shopifyOrderName: { type: String, default: "" }, // "#4232" — for the shipment email
     shopifySync: { type: syncStateSchema, default: () => ({}) },
     sheetSync: { type: syncStateSchema, default: () => ({}) },
     snapshot: { type: Schema.Types.Mixed, default: null },

@@ -250,3 +250,162 @@ export function unsubResultPage({ title, body, tone = "ok" }) {
   </div></div>
 </body></html>`;
 }
+
+/* ================================================================== *
+ *  ORDER ON THE WAY  (client requirement)
+ *  Sent the moment a renewal (or first order) is confirmed in Shopify.
+ *    "Your quarterly Order #4232 is on the way"
+ *  - carries the REAL Shopify order number
+ *  - cancel-subscription button (same signed unsubUrl as the reminder)
+ *  - cycleWord derives from the cycle length, never hardcoded
+ * ================================================================== */
+export function orderOnTheWayEmail({
+  firstName,
+  source,
+  orderNumber, // Shopify order name, e.g. "#4232" or "4232"
+  shipToLine, // optional: "1145 N Ogden Dr, Apt 109" (display only)
+  nextRenewalDate, // optional: when the following shipment is due
+  unsubUrl, // required for recurring orders
+  cycleWord = "quarterly",
+}) {
+  const name = esc(firstName || "there");
+  const prog = esc(programName(source));
+  const num = String(orderNumber || "").replace(/^#/, "");
+  const numDisp = num ? `#${num}` : "";
+  const cyc = esc(cycleWord);
+  const nextStr = nextRenewalDate
+    ? new Date(nextRenewalDate).toLocaleDateString("en-US", {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "America/Los_Angeles",
+      })
+    : "";
+
+  const subject = num
+    ? `Your ${cycleWord} order ${numDisp} is on the way`
+    : `Your ${cycleWord} DEFENT ONE order is on the way`;
+
+  const text = [
+    `Hi ${firstName || "there"},`,
+    ``,
+    `Good news — your ${cycleWord} DEFENT ONE order${num ? ` ${numDisp}` : ""} has been created and is on the way.`,
+    shipToLine ? `` : null,
+    shipToLine ? `Shipping to: ${shipToLine}` : null,
+    ``,
+    `It ships free, in plain, unmarked packaging. No action is needed from you.`,
+    nextStr ? `` : null,
+    nextStr ? `Your following shipment is scheduled around ${nextStr}.` : null,
+    ``,
+    unsubUrl
+      ? `Don't need future shipments? Cancel your ${cycleWord} enrollment here (this order still arrives):`
+      : null,
+    unsubUrl || null,
+    ``,
+    `If you or someone you know needs support, help is free and confidential — call or text 988, or dial 911 in an emergency.`,
+    ``,
+    `— The DEFENT team`,
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(subject)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f5f7;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+    Your ${cyc} order${num ? ` ${esc(numDisp)}` : ""} has shipped — free, plain packaging, nothing to do.
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f5f7;">
+    <tr><td align="center" style="padding:24px 12px;">
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="max-width:560px;background:#ffffff;border-radius:10px;overflow:hidden;
+                    font-family:Arial,Helvetica,sans-serif;">
+
+        <tr>
+          <td style="background:${BRAND};padding:20px 28px;">
+            <div style="color:#ffffff;font-size:18px;font-weight:bold;letter-spacing:.5px;">DEFENT ONE</div>
+            <div style="color:#c9d3e8;font-size:12px;padding-top:2px;">${prog}</div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:28px;">
+            <p style="margin:0 0 16px;font-size:16px;color:#1a1a1a;">Hi ${name},</p>
+
+            <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#333;">
+              Good news — your <strong>${cyc}</strong> DEFENT ONE order is on the way.
+            </p>
+
+            ${
+              num
+                ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                   style="background:#f4f7fb;border-left:4px solid ${BRAND};border-radius:4px;margin:0 0 20px;">
+              <tr><td style="padding:16px 18px;">
+                <div style="font-size:13px;color:#666;">Order number</div>
+                <div style="font-size:22px;font-weight:bold;color:${BRAND};padding-top:2px;">${esc(numDisp)}</div>
+                ${shipToLine ? `<div style="font-size:13px;color:#666;padding-top:8px;">Shipping to: ${esc(shipToLine)}</div>` : ""}
+              </td></tr>
+            </table>`
+                : ""
+            }
+
+            <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#333;">
+              It ships <strong>free</strong>, in plain, unmarked packaging. No action is needed from you.
+              ${nextStr ? `Your following shipment is scheduled around <strong>${esc(nextStr)}</strong>.` : ""}
+            </p>
+
+            ${
+              unsubUrl
+                ? `<hr style="border:none;border-top:1px solid #e6e6e6;margin:0 0 18px;">
+
+            <p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#333;">
+              Don't need future shipments? You can cancel your ${cyc} enrollment &mdash; no questions asked.
+              This order still arrives.
+            </p>
+
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 18px;">
+              <tr><td align="center" bgcolor="${BRAND}" style="border-radius:6px;">
+                <a href="${esc(unsubUrl)}"
+                   style="display:inline-block;padding:12px 26px;font-size:15px;font-weight:bold;
+                          color:#ffffff;text-decoration:none;border-radius:6px;">
+                  Cancel my ${cyc} shipments
+                </a>
+              </td></tr>
+            </table>`
+                : ""
+            }
+
+            <p style="margin:0;font-size:13px;line-height:1.6;color:#666;">
+              If you or someone you know needs support, help is free and confidential.
+              Call or text <strong>988</strong>, or dial <strong>911</strong> in an emergency.
+            </p>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="background:#2b2b2b;padding:16px 28px;">
+            <div style="font-size:12px;color:#bdbdbd;line-height:1.6;">
+              You're receiving this because you're enrolled in ${cyc} DEFENT ONE shipments.${
+                unsubUrl
+                  ? `<br><a href="${esc(unsubUrl)}" style="color:${ACCENT};text-decoration:underline;">Cancel ${cyc} shipments</a>`
+                  : ""
+              }
+            </div>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  return { subject, html, text };
+}

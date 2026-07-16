@@ -1,5 +1,6 @@
 import { ErrorLogModel } from "../model/errorLog.js";
 import { OrderModel, RenewalLogModel } from "../model/orderModel.js";
+import { sendOrderOnTheWay } from "../utils/orderOnTheWay.js";
 
 import { appendMonthly, backfillMonthlySheet } from "../utils/monthlySheet.js";
 import {
@@ -792,6 +793,7 @@ const confirmOrder = asyncHandler(async (req, res) => {
     isRenewal = false,
     status,
     shopifyOrderId = null,
+    orderName = "", // Shopify's human order number, e.g. "#4232"
     error = "",
   } = req?.body || {};
 
@@ -830,6 +832,7 @@ const confirmOrder = asyncHandler(async (req, res) => {
           $set: {
             status: "completed",
             shopifyOrderId,
+            shopifyOrderName: String(orderName || ""),
             "shopifySync.status": "synced",
             "shopifySync.lastAttemptAt": now,
             "shopifySync.lastError": "",
@@ -841,6 +844,25 @@ const confirmOrder = asyncHandler(async (req, res) => {
 
       if (advanced) {
         logSuccess({ message: "Renewal confirmed", orderId, timestamp: now });
+
+        /* "Your quarterly order #4232 is on the way" — sent exactly once
+         * per cycle: `advanced` is true only on the FIRST confirm of a
+         * cycle (advancePastCycle is idempotent), and the Resend
+         * idempotency key covers the crash window on top of that.
+         * Never let an email problem fail the confirm. */
+        const orderDoc = await OrderModel.findById(orderId).lean();
+        if (orderDoc) {
+          const mail = await sendOrderOnTheWay(orderDoc, { orderName, cycle });
+          if (mail.error) {
+            await saveErrorLog({
+              module: "confirmOrder",
+              stage: "order_on_the_way_email",
+              level: "warning",
+              message: mail.error,
+              context: { orderId, cycle, orderName },
+            });
+          }
+        }
       }
 
       return res
@@ -935,8 +957,12 @@ const confirmOrder = asyncHandler(async (req, res) => {
     /* ++ CHANGED ++  Never overwrite a shopifyOrderId we already hold.
      * If a stale retry lands after the order is already synced, silently
      * replacing the id would orphan the real Shopify order in our records
-     * and hide a duplicate. The filter makes the write a no-op instead. */
-    await OrderModel.updateOne(
+     * and hide a duplicate. The filter makes the write a no-op instead.
+     *
+     * findOneAndUpdate (pre-image) instead of updateOne so we can tell
+     * whether this confirm is the FIRST transition to synced — that is
+     * the only moment the "order on the way" email may fire. */
+    const prev = await OrderModel.findOneAndUpdate(
       {
         _id: orderId,
         $or: [{ shopifyOrderId: null }, { shopifyOrderId: shopifyOrderId }],
@@ -944,13 +970,32 @@ const confirmOrder = asyncHandler(async (req, res) => {
       {
         $set: {
           shopifyOrderId,
+          shopifyOrderName: String(orderName || ""),
           "shopifySync.status": "synced",
           "shopifySync.lastAttemptAt": now,
           "shopifySync.lastError": "",
         },
         $inc: { "shopifySync.attempts": 1 },
       },
-    );
+      { new: false }, // return the PRE-image
+    ).lean();
+
+    const firstSync = prev && prev.shopifySync?.status !== "synced";
+    if (firstSync) {
+      const mail = await sendOrderOnTheWay(
+        { ...prev, shopifyOrderId, shopifyOrderName: orderName },
+        { orderName, cycle: "first" },
+      );
+      if (mail.error) {
+        await saveErrorLog({
+          module: "confirmOrder",
+          stage: "order_on_the_way_email",
+          level: "warning",
+          message: mail.error,
+          context: { orderId, orderName, firstTime: true },
+        });
+      }
+    }
     return res
       .status(200)
       .json(new ApiResponse(200, { orderId }, "Order confirmed"));

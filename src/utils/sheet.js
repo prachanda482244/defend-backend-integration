@@ -67,9 +67,32 @@ function createSheetsClient(creds) {
 const _clients = {};
 function getClient(type) {
   if (_clients[type]) return _clients[type];
+
+  /* ONE service account for everything, unless you opt out.
+   *
+   * A service account is just an identity — it can edit ANY sheet that is
+   * shared with its email. monthlySheet.js already reuses the WEHO account
+   * for the Monthly sheet; this extends the same rule to the LA sheet.
+   *
+   *   - GOOGLE_CREDENTIALS_LA set     -> LA uses its own account (old behaviour)
+   *   - GOOGLE_CREDENTIALS_LA missing -> LA falls back to GOOGLE_CREDENTIALS_WEHO
+   *
+   * ⚠ For the fallback to work the LA spreadsheet must be shared (Editor)
+   *   with the WEHO service-account email, or every write returns 403. */
   const envKey =
-    type === "LA" ? "GOOGLE_CREDENTIALS_LA" : "GOOGLE_CREDENTIALS_WEHO";
+    type === "LA" && process.env.GOOGLE_CREDENTIALS_LA
+      ? "GOOGLE_CREDENTIALS_LA"
+      : "GOOGLE_CREDENTIALS_WEHO";
+
+  /* Same account -> same client. Sharing the instance keeps ONE token
+     cache and ONE pacer chain instead of two identical ones. */
+  if (envKey === "GOOGLE_CREDENTIALS_WEHO" && _clients.WEHO) {
+    _clients[type] = _clients.WEHO;
+    return _clients[type];
+  }
+
   _clients[type] = createSheetsClient(parseCreds(envKey));
+  if (envKey === "GOOGLE_CREDENTIALS_WEHO") _clients.WEHO = _clients[type];
   return _clients[type];
 }
 

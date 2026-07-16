@@ -215,17 +215,38 @@ export async function validateAddressWithZipFallback(
   const zip5 = String(postCode || "").slice(0, 5);
   const wantNum = houseNumberOf(line1);
 
+  /* The "city" in a geocoder query is a POSTAL label, and TIGER keys
+   * street ranges to postal city names. USPS's primary postal city for
+   * eastern-WeHo ZIPs (notably 90046) is "Los Angeles" — "West Hollywood"
+   * is only an alias. So a query hinting "West Hollywood" can miss a
+   * street Census files under "Los Angeles" even though the MUNICIPAL
+   * boundary (the thing we decide on) is genuinely West Hollywood.
+   * Example that failed all three old attempts: "1145 N Ogden Dr".
+   *
+   * Extra rungs are safe: the service-area gate still decides on the
+   * Incorporated Places layer, so a looser query can never let a
+   * City-of-LA address into the WeHo program — it only helps Census
+   * FIND the address so the boundary check can run at all.
+   *
+   * `needsBox`: attempts with neither city nor zip can match a
+   * same-named street anywhere in CA, so require LA-area coordinates. */
   const attempts = [
-    oneLine, // as the caller built it: "line1, city, CA zip"
-    `${line1}, ${city}, CA`, // no ZIP
-    `${line1}, CA`, // no ZIP, no city
+    { q: oneLine, needsBox: false }, // "line1, city, CA zip"
+    { q: `${line1}, ${city}, CA`, needsBox: false }, // no ZIP
+    ...(zip5
+      ? [{ q: `${line1}, CA ${zip5}`, needsBox: false }] // ZIP only, no city label
+      : []),
+    ...(!isLA
+      ? [{ q: `${line1}, Los Angeles, CA`, needsBox: false }] // WeHo street filed under LA postal city
+      : []),
+    { q: `${line1}, CA`, needsBox: true }, // last resort: no ZIP, no city
   ];
 
   let hit = null;
   let lastFail = null;
 
-  for (let i = 0; i < attempts.length; i += 1) {
-    const res = await geocodeCensus(attempts[i], { wantHouseNumber: wantNum });
+  for (const attempt of attempts) {
+    const res = await geocodeCensus(attempt.q, { wantHouseNumber: wantNum });
 
     if (!res.ok) {
       lastFail = res;
@@ -234,9 +255,7 @@ export async function validateAddressWithZipFallback(
       continue; // not_found -> try a looser query
     }
 
-    /* Attempt 3 carries no city hint, so a same-named street elsewhere in
-       California could match. Require it to at least be in the LA area. */
-    if (i === 2 && !inLAArea(res.coordinates)) {
+    if (attempt.needsBox && !inLAArea(res.coordinates)) {
       lastFail = { ok: false, reason: "not_found" };
       continue;
     }
