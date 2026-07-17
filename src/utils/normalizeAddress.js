@@ -9,21 +9,28 @@ export const normalizeAddress = (s = "") =>
     .trim()
     .replace(/\s+/g, "");
 
-export const normalizeLine2 = (s = "") => normalizeAddress(s); // separate for clarity
+/* ++ DEDUPE HOLE FIX ++
+ * "Apt 4", "Suite 4", "Unit 4", "#4", "Apt. 4" must all be ONE household.
+ * Strip the LEADING designator word(s), keep the identifier. A line2 that
+ * is ONLY designator words ("basement apt") is kept as-is. */
+const UNIT_DESIGNATOR =
+  /^(?:apartment|apt|suite|ste|unit|room|rm|number|num|no|hash)\s*/;
 
-// validators/address.js
-const ADDRESS_ALLOWED = /^[0-9A-Za-z\s#\-.,/]+$/;
+export const normalizeLine2 = (s = "") => {
+  const spaced = String(s)
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/#/g, " hash ") // "#4" -> " hash 4" so the regex can see it
+    .replace(/[\s\W_]+/g, " ")
+    .trim();
 
-export function validateStreetAddress(raw) {
-  const s = String(raw || "")
-    .trim()
-    .replace(/\s+/g, " ");
-  if (!s) return { ok: false, error: "Street address is required" };
-  if (!ADDRESS_ALLOWED.test(s))
-    return { ok: false, error: "Address contains invalid characters" };
-  if (/[#\-.,/]{2,}/.test(s))
-    return { ok: false, error: "Address has invalid punctuation" };
-  if (/[#\-.,/]$/.test(s))
-    return { ok: false, error: "Address cannot end with punctuation" };
-  return { ok: true, value: s };
-}
+  let stripped = spaced;
+  for (;;) {
+    const next = stripped.replace(UNIT_DESIGNATOR, "");
+    if (next === stripped) break;
+    stripped = next;
+  }
+
+  const chosen = stripped.trim() || spaced;
+  return chosen.replace(/\s+/g, "");
+};

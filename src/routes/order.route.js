@@ -9,12 +9,15 @@ import {
   confirmOrder,
   backfillSyncStatus,
   syncMonthlyToNewSheet,
+  validateAddressOnly,
 } from "../controller/order.controller.js";
 
 const orderRouter = Router();
 
 orderRouter.route("/").post(createOrder).get(getAll30DaysAgoOrder);
 orderRouter.post("/confirm", confirmOrder);
+orderRouter.post("/validate-address", validateAddressOnly);
+
 orderRouter
   .route("/r-g/duplicates-orders")
   .delete(removeDuplicateOrders)

@@ -10,6 +10,7 @@ import orderRouter from "./routes/order.route.js";
 import errorRouter from "./routes/error.route.js";
 import subscriptionRouter from "./routes/subscription.route.js"; // ++ NEW
 import retryRouter from "./routes/retry.route.js"; // ++ NEW
+import { rateLimit } from "./utils/rateLimit.js"; // ++ SPEC 9: bot protection
 import { errorMiddleware } from "./middleware/error.middleware.js";
 import "./utils/cron.js"; // renewals + (now) reminder & reconcile crons
 
@@ -32,13 +33,17 @@ app.use(express.static("public"));
 app.use("/api/v1/report", reportRouter);
 app.use("/api/v1/chart", chartRouter);
 app.use("/api/v1/admin", adminRouter);
-app.use("/api/v1/order", orderRouter);
+/* ++ SPEC §9 ++  Per-IP rate limit on the PUBLIC intake surface. The
+   Remix app's server-to-server calls bypass it by sending the
+   x-internal-key header (INTERNAL_API_KEY env, set the same value on
+   both services). 20 requests / 10 min / IP by default. */
+app.use("/api/v1/order", rateLimit, orderRouter);
 app.use("/api/v1/error", errorRouter);
 
 /* ++ NEW: 15-day email unsubscribe flow ++
    GET  /api/v1/subscription/unsubscribe?t=<token>  -> confirmation page
    POST /api/v1/subscription/unsubscribe            -> actually cancels   */
-app.use("/api/v1/subscription", subscriptionRouter);
+app.use("/api/v1/subscription", rateLimit, subscriptionRouter);
 
 /* ++ NEW: manual Shopify retry / recovery ++
    GET  /api/v1/retry/stuck  -> what hasn't reached Shopify
@@ -66,7 +71,7 @@ app.use(errorMiddleware);
  *  value nobody could see. SHOPIFY_APP_URL in particular has a silent
  *  fallback to the PRODUCTION Render app — so a missing var doesn't error,
  *  it just quietly sends your local renewals to the wrong server.
- 
+ *
  *  Print the resolved values once, at startup. Secrets masked.
  * ------------------------------------------------------------------ */
 const mask = (v) =>

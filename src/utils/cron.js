@@ -19,7 +19,12 @@ const REMIX_URL = () => resolveRemixUrl();
 /* ++ QUARTERLY ++  The cycle is now CALENDAR MONTHS, not days.
    90-day counting drifts (Apr 1 + 90d = Jun 30, not Jul 1) and never
    recovers. See cycle.js for the full reasoning. */
-import { CYCLE_MONTHS, cycleSummary, RECURRING_MATCH } from "./cycle.js";
+import {
+  CYCLE_MONTHS,
+  SNAP_TO_FIRST,
+  cycleSummary,
+  RECURRING_MATCH,
+} from "./cycle.js";
 
 const LOCK_NAME = "recurring-renewals";
 const LOCK_TTL_MS = 30 * 60 * 1000;
@@ -87,16 +92,44 @@ async function findDueRenewals() {
 
     /* ++ QUARTERLY ++  Due when renewAt + CYCLE_MONTHS calendar months has
        arrived. $dateAdd does real month arithmetic (and clamps month-ends:
-       Jan 31 + 1 month = Feb 28). Requires MongoDB 5.0+, which you have. */
+       Jan 31 + 1 month = Feb 28). Requires MongoDB 5.0+, which you have.
+
+       ++ CLIENT RULE ++  SNAPPED TO THE 1st, exactly like cycle.js's
+       nextDueAt(): base = renewAt + cycle; if base is already the 1st it
+       stays, otherwise round UP to the 1st of the next month.
+       (Jun 17 -> Oct 1 -> Jan 1 -> Apr 1.) The two computations MUST
+       agree, or the cron would claim renewals the API's isDue() then
+       rejects as not-due — a 409 loop. */
     {
       $addFields: {
-        dueAt: {
+        dueBase: {
           $dateAdd: {
             startDate: "$renewAt",
             unit: "month",
             amount: CYCLE_MONTHS,
           },
         },
+      },
+    },
+    {
+      $addFields: {
+        dueAt: SNAP_TO_FIRST
+          ? {
+              $cond: [
+                { $eq: [{ $dayOfMonth: "$dueBase" }, 1] },
+                "$dueBase",
+                {
+                  $dateAdd: {
+                    startDate: {
+                      $dateTrunc: { date: "$dueBase", unit: "month" },
+                    },
+                    unit: "month",
+                    amount: 1,
+                  },
+                },
+              ],
+            }
+          : "$dueBase",
       },
     },
     { $match: { dueAt: { $lte: now } } },

@@ -460,9 +460,11 @@ const createOrder = asyncHandler(async (req, res) => {
         ? "We couldn't find that address. Please check the street number and name and try again."
         : v?.reason === "house_number_mismatch"
           ? "We couldn't verify that street number. Please check it and try again."
-          : v?.reason === "unverifiable"
-            ? "We couldn't verify your address right now — our address service is temporarily unavailable. Please try again in a few minutes."
-            : areaMsg; // zip_mismatch / anything else
+          : v?.reason === "zip_mismatch"
+            ? "That ZIP code doesn't match this address. Please check the ZIP and try again."
+            : v?.reason === "unverifiable"
+              ? "We couldn't verify your address right now — our address service is temporarily unavailable. Please try again in a few minutes."
+              : areaMsg; // anything else
 
     await saveErrorLog({
       module: "createOrder",
@@ -561,6 +563,16 @@ const createOrder = asyncHandler(async (req, res) => {
 
   const normalizedAddress1 = v.normalized;
   const normalizedAddress2 = line2 ? normalizeLine2(line2) : "";
+
+  /* ++ SPEC §4b/§12 ++  Capture what Census actually told us.
+   * components.city is the TRUE USPS mailing city ("VAN NUYS", "SAN
+   * PEDRO", ...) — the label city for Shopify. coordinates/place are the
+   * boundary-check evidence. Title-case the city for the label. */
+  const titleCase = (s = "") =>
+    String(s)
+      .toLowerCase()
+      .replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  const mailingCity = titleCase(v?.components?.city || city);
 
   // ---- DEDUP (fixed): newest order at this address, lastRenewAt ?? createdAt ----
   const query = line2
@@ -733,6 +745,13 @@ const createOrder = asyncHandler(async (req, res) => {
       : { nextOrderAt: null, nextReminderAt: null }),
     normalizedAddress: normalizedAddress1,
     normalizedAddress2: normalizedAddress2 || null,
+    mailingCity, // true USPS city for the shipping label (spec §4b)
+    geo: {
+      lat: v?.coordinates?.y ?? null, // Census: y = latitude
+      lng: v?.coordinates?.x ?? null, // Census: x = longitude
+      place: v?.placeRaw || "",
+      boundaryCheck: "pass", // only passing addresses reach this point
+    },
     source: flag === "defentLA" ? "Defent La" : "Defent Weho",
     demographics: {
       age: age || "",
@@ -1061,6 +1080,11 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
+  /* ++ SEARCH ++  ?search=<text> matches name or email, case-insensitive.
+     A search deliberately IGNORES the 30-day window — support staff need
+     to find any customer ever, not just recent ones. */
+  const search = String(req?.query?.search || "").trim();
+
   let sourceFilterArray = null;
   let filterDisplayValue = null;
 
@@ -1072,18 +1096,28 @@ const getAll30DaysAgoOrder = asyncHandler(async (req, res) => {
     filterDisplayValue = "Defent La";
   }
 
-  const matchConditions = { updatedAt: { $gte: thirtyDaysAgo } };
+  const ands = [];
+  if (!search) ands.push({ updatedAt: { $gte: thirtyDaysAgo } });
 
   if (sourceFilterParam === "defentWeho") {
-    matchConditions.$or = [
-      { source: { $in: sourceFilterArray } },
-      { source: { $exists: false } },
-      { source: null },
-      { source: "" },
-    ];
+    ands.push({
+      $or: [
+        { source: { $in: sourceFilterArray } },
+        { source: { $exists: false } },
+        { source: null },
+        { source: "" },
+      ],
+    });
   } else if (sourceFilterParam === "defentLa") {
-    matchConditions.source = "Defent La";
+    ands.push({ source: "Defent La" });
   }
+
+  if (search) {
+    const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    ands.push({ $or: [{ firstName: rx }, { lastName: rx }, { email: rx }] });
+  }
+
+  const matchConditions = ands.length ? { $and: ands } : {};
 
   const pipeline = [
     { $match: matchConditions },
@@ -1506,6 +1540,7 @@ const syncMonthlyToNewSheet = asyncHandler(async (req, res) => {
 
 export {
   createOrder,
+  validateAddressOnly,
   getAll30DaysAgoOrder,
   updateSubscription,
   removeDuplicateOrders,
@@ -1515,3 +1550,121 @@ export {
   backfillSyncStatus,
   syncMonthlyToNewSheet,
 };
+
+/* ================================================================== *
+ *  validateAddressOnly  (POST /order/validate-address)
+ *
+ *  DRY-RUN address check for the admin app: runs the exact same
+ *  validation pipeline as createOrder — line checks, Census geocode,
+ *  municipal-boundary gate, ZIP-agreement guard, household-dedupe
+ *  status — but creates NOTHING and sends NOTHING. Read-only.
+ *
+ *  body: { streetAddress, streetAddress2?, postCode, flag }
+ * ================================================================== */
+const validateAddressOnly = asyncHandler(async (req, res) => {
+  const {
+    streetAddress: _line1,
+    streetAddress2: _line2,
+    postCode,
+    flag = "defentLA",
+  } = req?.body || {};
+
+  const fail = (reason, message, extra = {}) =>
+    res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          { eligible: false, reason, message, ...extra },
+          message,
+        ),
+      );
+
+  if (!_line1 || !postCode) {
+    return fail("missing_fields", "Street address and ZIP are required.");
+  }
+
+  const v1 = validateAddressLine1(_line1);
+  if (!v1?.ok) return fail("bad_line1", v1?.error || "Invalid address line 1");
+  const line1 = v1.value;
+
+  const v2 = validateAddressLine2(_line2);
+  if (!v2?.ok) return fail("bad_line2", v2?.error || "Invalid address line 2");
+  const line2 = v2.value;
+
+  const isLA = flag === "defentLA";
+  const city = isLA ? "Los Angeles" : "West Hollywood";
+  const oneLine = `${line1}, ${city}, CA ${String(postCode).slice(0, 5)}`;
+
+  const v = await validateAddressWithZipFallback(oneLine, {
+    postCode,
+    isLA,
+    city,
+    line1,
+  });
+
+  if (!v?.ok) {
+    const msg =
+      v?.reason === "not_found"
+        ? "Census cannot find this address. Check the street number and name."
+        : v?.reason === "house_number_mismatch"
+          ? "The street exists but this house number could not be verified."
+          : v?.reason === "zip_mismatch"
+            ? "The ZIP code does not match this address (Census places the street in a different ZIP)."
+            : v?.reason === "unverifiable"
+              ? "Census is temporarily unreachable — try again in a few minutes."
+              : "Address could not be verified.";
+    return fail(v?.reason || "unverified", msg, { transient: !!v?.transient });
+  }
+
+  const serviceAreaOK = isLA ? isLosAngelesOK(v) : isWestHollywoodOK(v);
+  const place = v?.placeRaw || "(no municipality)";
+  const mailingCity = String(v?.components?.city || city)
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
+  /* Household availability (read-only — mirrors createOrder's dedupe). */
+  const normalizedAddress1 = v.normalized;
+  const normalizedAddress2 = line2 ? normalizeLine2(line2) : "";
+  const dq = line2
+    ? { normalizedAddress: normalizedAddress1, normalizedAddress2 }
+    : { normalizedAddress: normalizedAddress1 };
+  const existing = await OrderModel.findOne(dq).sort({ createdAt: -1 }).lean();
+
+  let household = { blocked: false };
+  if (existing) {
+    const renewRef = existing.lastRenewAt ?? existing.createdAt;
+    const recurring =
+      isRecurring(existing.subscription) && existing.isActive !== false;
+    const oneTimeDays = Number(process.env.ONE_TIME_REORDER_DAYS || 30);
+    const until = recurring
+      ? addMonths(new Date(renewRef), DEDUPE_MONTHS)
+      : new Date(
+          new Date(renewRef).getTime() + oneTimeDays * 24 * 60 * 60 * 1000,
+        );
+    household = {
+      blocked: Date.now() < until.getTime(),
+      blockedUntil: until,
+      existingOrderId: String(existing._id),
+      existingType: recurring ? "active subscription" : "one-time / cancelled",
+    };
+  }
+
+  const detail = {
+    eligible: serviceAreaOK,
+    program: isLA ? "Defent LA" : "Defent WEHO",
+    normalized: v.normalized,
+    municipality: place,
+    mailingCity,
+    coordinates: v.coordinates || null,
+    typedZip: String(postCode).slice(0, 5),
+    matchedZip: v?.components?.zip5 || "",
+    household,
+    message: serviceAreaOK
+      ? `Eligible — inside the City of ${city}. Ship-to city: ${mailingCity}.`
+      : serviceAreaReason(v, isLA),
+  };
+
+  if (!serviceAreaOK) detail.reason = "outside_service_area";
+  return res.status(200).json(new ApiResponse(200, detail, detail.message));
+});

@@ -63,6 +63,21 @@ const orderSchema = new Schema(
     /* Human order number Shopify shows customers, e.g. "#4232".
        Purely additive — used by the "order on the way" email. */
     shopifyOrderName: { type: String, default: "" },
+
+    /* ++ SPEC §4b ++  The TRUE USPS mailing city from Census — "VAN NUYS",
+       "SAN PEDRO", ... Many City-of-LA addresses do NOT use "Los Angeles"
+       as their mailing city; forcing it misaddresses the Valley/Harbor.
+       Shopify shipping labels use THIS, not the program flag. */
+    mailingCity: { type: String, default: "" },
+
+    /* ++ SPEC §12 ++  Geocode + boundary-check evidence for the order. */
+    geo: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      place: { type: String, default: "" }, // Census Incorporated Place
+      boundaryCheck: { type: String, default: "" }, // "pass" (rejects never persist)
+    },
+
     shopifySync: { type: syncStateSchema, default: () => ({}) },
     sheetSync: { type: syncStateSchema, default: () => ({}) },
 

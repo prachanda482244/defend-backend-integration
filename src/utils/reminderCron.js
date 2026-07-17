@@ -49,6 +49,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  *  days" is now literally accurate. */
 import {
   CYCLE_MONTHS,
+  SNAP_TO_FIRST,
   REMINDER_BEFORE_DAYS,
   nextDueAt,
   reminderAt,
@@ -94,18 +95,40 @@ async function findDueReminders() {
     },
     { $addFields: { renewAt: { $ifNull: ["$lastRenewAt", "$createdAt"] } } },
 
-    /* dueAt        = renewAt + CYCLE_MONTHS  (the next shipment)
+    /* dueAt        = renewAt + CYCLE_MONTHS, SNAPPED to the 1st
+                      (same rule as cycle.js nextDueAt — see cron.js)
        remindAt     = dueAt - REMINDER_BEFORE_DAYS
        Send when:   remindAt <= now < dueAt                                */
     {
       $addFields: {
-        dueAt: {
+        dueBase: {
           $dateAdd: {
             startDate: "$renewAt",
             unit: "month",
             amount: CYCLE_MONTHS,
           },
         },
+      },
+    },
+    {
+      $addFields: {
+        dueAt: SNAP_TO_FIRST
+          ? {
+              $cond: [
+                { $eq: [{ $dayOfMonth: "$dueBase" }, 1] },
+                "$dueBase",
+                {
+                  $dateAdd: {
+                    startDate: {
+                      $dateTrunc: { date: "$dueBase", unit: "month" },
+                    },
+                    unit: "month",
+                    amount: 1,
+                  },
+                },
+              ],
+            }
+          : "$dueBase",
       },
     },
     {

@@ -244,6 +244,7 @@ export async function validateAddressWithZipFallback(
 
   let hit = null;
   let lastFail = null;
+  let zipMismatchSeen = null;
 
   for (const attempt of attempts) {
     const res = await geocodeCensus(attempt.q, { wantHouseNumber: wantNum });
@@ -260,8 +261,42 @@ export async function validateAddressWithZipFallback(
       continue;
     }
 
+    /* ++ SAME-NAME-STREET GUARD ++
+     *
+     * Real leak: a Santa Monica resident typed "2222 4th St, 90405". The
+     * zip-less rungs let Census match a DIFFERENT street — E/W 4th St
+     * inside LA — and the boundary gate then honestly said "Los Angeles
+     * city". We verified that *a* 2222 4th St exists in LA, not that
+     * *their* 2222 4th St is in LA. Common names (4th, Main, Broadway)
+     * make this trivially reachable.
+     *
+     * A trustworthy match must AGREE with the customer about where they
+     * are: matched ZIP == typed ZIP. Disagreement means Census found a
+     * same-named street somewhere else — keep escalating, and if nothing
+     * agreeing turns up, reject as zip_mismatch (the form tells them to
+     * check the ZIP; genuine typos self-resolve on resubmit). Customers
+     * with no typed ZIP can't be checked — the ladder never runs without
+     * one in practice (postCode is required upstream). */
+    if (zip5 && res.components?.zip5 && res.components.zip5 !== zip5) {
+      /* Remember the mismatch even if later rungs return not_found — the
+         mismatch is the more useful thing to tell the customer. */
+      zipMismatchSeen = {
+        ok: false,
+        reason: "zip_mismatch",
+        matched: res.normalized,
+      };
+      lastFail = zipMismatchSeen;
+      continue; // maybe a later rung finds the SAME street in the typed ZIP
+    }
+
     hit = res;
     break;
+  }
+
+  /* If the ladder ended without a hit and we saw a ZIP disagreement at any
+     point, report THAT — "check your ZIP" beats "address not found". */
+  if (!hit && zipMismatchSeen && lastFail?.reason === "not_found") {
+    lastFail = zipMismatchSeen;
   }
 
   if (!hit) {

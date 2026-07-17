@@ -118,9 +118,40 @@ export function addMonths(date, months) {
   return d;
 }
 
+/* ++ CLIENT RULE (final) ++  SHIPMENTS LAND ON THE 1st.
+ *
+ *   "if they ordered june 17, they will receive the next october 1st
+ *    then jan 1st then april 1st"
+ *
+ * Rule: next shipment = renewAt + CYCLE_MONTHS calendar months, ROUNDED
+ * UP to the 1st of the following month — unless it already lands on a
+ * 1st, in which case it stays.
+ *
+ *     Jun 17 + 3mo = Sep 17  -> Oct 1     (first renewal snaps)
+ *     Oct  1 + 3mo = Jan  1  -> Jan 1     (already a 1st — stays)
+ *                            -> Apr 1, Jul 1, ...
+ *
+ * Consequences, all intended:
+ *   - nobody is ever shipped sooner than CYCLE_MONTHS FULL months;
+ *   - after the first renewal every subscriber is on a 1st-of-month
+ *     schedule, quarterly thereafter;
+ *   - reminderAt follows automatically (dueAt - REMINDER_BEFORE_DAYS),
+ *     so reminders go out mid-month before each 1st.
+ *
+ * RENEWAL_SNAP_TO_FIRST=false restores plain anniversary dates. */
+export const SNAP_TO_FIRST = process.env.RENEWAL_SNAP_TO_FIRST !== "false";
+
+/** Round a date UP to the 1st of the next month, unless it IS a 1st. */
+export function roundUpToFirst(date) {
+  const d = new Date(date);
+  if (d.getUTCDate() === 1) return d;
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+}
+
 /** The date a subscription that last renewed at `renewAt` is next due. */
 export function nextDueAt(renewAt) {
-  return addMonths(new Date(renewAt), CYCLE_MONTHS);
+  const base = addMonths(new Date(renewAt), CYCLE_MONTHS);
+  return SNAP_TO_FIRST ? roundUpToFirst(base) : base;
 }
 
 /** Is this subscription due for a shipment? */
@@ -146,10 +177,13 @@ export function reminderAt(renewAt) {
  * One outage, one parcel.
  */
 export function nextAnchor(cycleDate, now = Date.now()) {
-  let d = addMonths(new Date(cycleDate), CYCLE_MONTHS);
+  /* Step along the SAME schedule nextDueAt() defines — with snapping on,
+     the first step lands on a 1st and every later step stays on 1sts
+     (a 1st + 3 months is a 1st, and roundUpToFirst leaves it alone). */
+  let d = nextDueAt(new Date(cycleDate));
   // Skip whole cycles that were missed entirely.
-  while (addMonths(d, CYCLE_MONTHS).getTime() <= now) {
-    d = addMonths(d, CYCLE_MONTHS);
+  while (nextDueAt(d).getTime() <= now) {
+    d = nextDueAt(d);
   }
   return d;
 }
