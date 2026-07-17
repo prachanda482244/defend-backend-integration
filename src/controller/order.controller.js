@@ -1015,7 +1015,13 @@ const confirmOrder = asyncHandler(async (req, res) => {
     ).lean();
 
     const firstSync = prev && prev.shopifySync?.status !== "synced";
-    if (firstSync) {
+    /* ++ CLIENT RULE ++  NO email on a first order — the customer just
+     * placed it themselves, they know it's coming. The instant "on the
+     * way" email is for RENEWALS only (boxes they didn't just click for),
+     * and the 14-day reminder handles the rest.
+     * Re-enable with ORDER_EMAIL_ON_FIRST=true if the client reverses. */
+    const firstOrderEmailOn = process.env.ORDER_EMAIL_ON_FIRST === "true";
+    if (firstSync && firstOrderEmailOn) {
       const mail = await sendOrderOnTheWay(
         { ...prev, shopifyOrderId, shopifyOrderName: orderName },
         { orderName, cycle: "first" },
