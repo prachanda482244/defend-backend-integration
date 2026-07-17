@@ -570,17 +570,32 @@ const createOrder = asyncHandler(async (req, res) => {
   const existingOrder = await OrderModel.findOne(query).sort({ createdAt: -1 });
   const renewRef = existingOrder?.lastRenewAt ?? existingOrder?.createdAt;
 
-  /* ++ QUARTERLY ++  The address block now matches the CYCLE length.
+  /* ++ QUARTERLY ++  The address block now matches the CYCLE length —
+   * but ONLY for recurring subscriptions.
    *
-   * It was a fixed 30 days. With a quarterly cycle that opens a hole: an
-   * active subscriber's lastRenewAt only moves every 3 months, so 45 days
-   * in they'd be outside the 30-day block and could place a SECOND order —
-   * and then receive both it AND their quarterly shipment.
+   * ++ CLIENT RULE ++  One-time buyers may purchase again after 30 days.
+   * A recurring subscriber's household stays blocked for the full cycle
+   * (they already have a shipment coming); a one-time household is only
+   * blocked for ONE_TIME_REORDER_DAYS (default 30).
    *
-   * One shipment per household per cycle. Override with ORDER_DEDUPE_MONTHS
-   * if the program's eligibility rule ever diverges from the ship cadence. */
+   * The window is chosen by what the EXISTING order at this address is:
+   *   existing recurring + active  -> blocked until lastRenewAt + cycle
+   *   existing one-time / cancelled -> blocked until created/renewed + 30d
+   * Override with ORDER_DEDUPE_MONTHS / ONE_TIME_REORDER_DAYS. */
+  const ONE_TIME_REORDER_DAYS = Number(process.env.ONE_TIME_REORDER_DAYS || 30);
+
+  const existingIsRecurring =
+    existingOrder &&
+    isRecurring(existingOrder.subscription) &&
+    existingOrder.isActive !== false;
+
   const dedupeBlockUntil = renewRef
-    ? addMonths(new Date(renewRef), DEDUPE_MONTHS)
+    ? existingIsRecurring
+      ? addMonths(new Date(renewRef), DEDUPE_MONTHS)
+      : new Date(
+          new Date(renewRef).getTime() +
+            ONE_TIME_REORDER_DAYS * 24 * 60 * 60 * 1000,
+        )
     : null;
 
   if (
