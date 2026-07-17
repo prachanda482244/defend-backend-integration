@@ -66,7 +66,7 @@ app.use(errorMiddleware);
  *  value nobody could see. SHOPIFY_APP_URL in particular has a silent
  *  fallback to the PRODUCTION Render app — so a missing var doesn't error,
  *  it just quietly sends your local renewals to the wrong server.
- *
+ 
  *  Print the resolved values once, at startup. Secrets masked.
  * ------------------------------------------------------------------ */
 const mask = (v) =>
