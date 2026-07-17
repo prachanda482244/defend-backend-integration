@@ -463,7 +463,7 @@ const createOrder = asyncHandler(async (req, res) => {
           : v?.reason === "zip_mismatch"
             ? "That ZIP code doesn't match this address. Please check the ZIP and try again."
             : v?.reason === "unverifiable"
-              ? "We couldn't verify your address right now — our address service is temporarily unavailable. Please try again in a few minutes."
+              ? "We couldn't find that address. Please check the street number and name and try again."
               : areaMsg; // anything else
 
     await saveErrorLog({
