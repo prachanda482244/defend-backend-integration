@@ -3,7 +3,7 @@
  *
  *  Sends the "Your quarterly order #4232 is on the way" email the
  *  moment a Shopify order is CONFIRMED (first-time or renewal).
- *
+ 
  *  Exactly-once, twice over:
  *    1. The CALLER only invokes this on the first transition to synced
  *       (renewals: advancePastCycle() returned true; first orders: the
