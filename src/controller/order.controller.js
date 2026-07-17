@@ -1,6 +1,6 @@
 import { ErrorLogModel } from "../model/errorLog.js";
 import { OrderModel, RenewalLogModel } from "../model/orderModel.js";
-import { sendOrderOnTheWay } from "../utils/orderOnTheWay.js";
+import { sendOrderOnTheWay } from "../utils/orderOntheWay.js";
 
 import { appendMonthly, backfillMonthlySheet } from "../utils/monthlySheet.js";
 import {
