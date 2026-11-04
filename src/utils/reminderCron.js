@@ -48,12 +48,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  *  And it makes the email copy true: "your next shipment arrives in 15
  *  days" is now literally accurate. */
 import {
-  CYCLE_MONTHS,
-  SNAP_TO_FIRST,
-  REMINDER_BEFORE_DAYS,
+  dueAtExpr,
+  remindAtExpr,
   nextDueAt,
-  reminderAt,
   daysUntilDue,
+  siteOf,
+  isRecurring,
   RECURRING_MATCH,
 } from "./cycle.js";
 
@@ -95,53 +95,12 @@ async function findDueReminders() {
     },
     { $addFields: { renewAt: { $ifNull: ["$lastRenewAt", "$createdAt"] } } },
 
-    /* dueAt        = renewAt + CYCLE_MONTHS, SNAPPED to the 1st
-                      (same rule as cycle.js nextDueAt — see cron.js)
-       remindAt     = dueAt - REMINDER_BEFORE_DAYS
-       Send when:   remindAt <= now < dueAt                                */
-    {
-      $addFields: {
-        dueBase: {
-          $dateAdd: {
-            startDate: "$renewAt",
-            unit: "month",
-            amount: CYCLE_MONTHS,
-          },
-        },
-      },
-    },
-    {
-      $addFields: {
-        dueAt: SNAP_TO_FIRST
-          ? {
-              $cond: [
-                { $eq: [{ $dayOfMonth: "$dueBase" }, 1] },
-                "$dueBase",
-                {
-                  $dateAdd: {
-                    startDate: {
-                      $dateTrunc: { date: "$dueBase", unit: "month" },
-                    },
-                    unit: "month",
-                    amount: 1,
-                  },
-                },
-              ],
-            }
-          : "$dueBase",
-      },
-    },
-    {
-      $addFields: {
-        remindAt: {
-          $dateSubtract: {
-            startDate: "$dueAt",
-            unit: "day",
-            amount: REMINDER_BEFORE_DAYS,
-          },
-        },
-      },
-    },
+    /* dueAt    = per-site next shipment (cycle.js dueAtExpr — the SAME
+                  expression the renewal cron uses)
+       remindAt = dueAt - per-site reminder days (LA 14/15, WEHO 15)
+       Send when: remindAt <= now < dueAt                                  */
+    { $addFields: { dueAt: dueAtExpr("$renewAt") } },
+    { $addFields: { remindAt: remindAtExpr("$dueAt") } },
     { $match: { remindAt: { $lte: now }, dueAt: { $gt: now } } },
     { $sort: { renewAt: 1, createdAt: -1 } },
     {
@@ -195,14 +154,16 @@ async function claimReminder(order, cycle) {
 /** Turn an order + cycle into a ready-to-send message. */
 function buildMessage(order, cycle) {
   const renewAt = new Date(order.lastRenewAt ?? order.createdAt);
-  const nextRenewalAt = new Date(renewAt.getTime() + CYCLE_DAYS * DAY_MS);
+  const site = siteOf(order);
+
+  /* ++ FIXED ++  This used `CYCLE_DAYS`, which was never defined — every
+     build threw, the claim was deleted, and no reminder ever went out.
+     Now it uses the same per-site schedule the renewal cron uses. */
+  const nextRenewalAt = nextDueAt(renewAt, site);
 
   // Days remaining until the NEXT shipment goes out. Computed live, so a
   // cron that runs a day late still tells the customer the truth.
-  const daysUntilNext = Math.max(
-    0,
-    Math.ceil((nextRenewalAt.getTime() - Date.now()) / DAY_MS),
-  );
+  const daysUntilNext = daysUntilDue(renewAt, Date.now(), site);
 
   const unsubUrl = buildUnsubUrl({ orderId: order._id, cycle });
 
@@ -253,7 +214,7 @@ async function runRemindersInner() {
     if (!order?._id) continue;
     // Guard: they may have unsubscribed since the failed attempt.
     if (
-      order.subscription !== "monthly" ||
+      !isRecurring(order.subscription) ||
       !order.isActive ||
       !order.isRenewable
     ) {

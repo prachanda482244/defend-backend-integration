@@ -14,14 +14,14 @@ import {
 import {
   CYCLE_MONTHS,
   reminderAt,
-  DEDUPE_MONTHS,
-  addMonths,
   nextDueAt,
   isDue,
   nextAnchor,
   cycleSummary,
   RECURRING_MATCH,
   isRecurring,
+  siteOf,
+  recurringDedupeUntil,
 } from "../utils/cycle.js";
 import { ApiError } from "../utils/ApiErrors.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -141,7 +141,13 @@ async function advancePastCycle(orderId, cycle) {
   if (Number.isNaN(cycleStart.getTime())) return false;
   const cycleEnd = new Date(cycleStart.getTime() + 24 * 60 * 60 * 1000);
 
-  const anchored = nextAnchor(cycleStart);
+  /* Per-site schedule (LA quarterly, WEHO 30 days). If the order can't be
+     found there's nothing to advance. */
+  const doc = await OrderModel.findById(orderId).select("source").lean();
+  if (!doc) return false;
+  const site = siteOf(doc);
+
+  const anchored = nextAnchor(cycleStart, Date.now(), site);
 
   const res = await OrderModel.updateOne(
     {
@@ -166,8 +172,8 @@ async function advancePastCycle(orderId, cycle) {
     {
       $set: {
         lastRenewAt: anchored,
-        nextOrderAt: nextDueAt(anchored),
-        nextReminderAt: reminderAt(anchored),
+        nextOrderAt: nextDueAt(anchored, site),
+        nextReminderAt: reminderAt(anchored, site),
       },
     },
   );
@@ -261,8 +267,9 @@ const createOrder = asyncHandler(async (req, res) => {
     /* ++ QUARTERLY ++  Due check — calendar months, not a day count.
        lastRenewAt ?? createdAt; updatedAt deliberately NOT used. */
     const lastRenew = existing.lastRenewAt ?? existing.createdAt;
-    if (!isDue(lastRenew)) {
-      const msg = `Renewal not due yet (next: ${nextDueAt(lastRenew).toISOString().slice(0, 10)})`;
+    const renewSite = siteOf(existing); // LA quarterly / WEHO 30 days
+    if (!isDue(lastRenew, Date.now(), renewSite)) {
+      const msg = `Renewal not due yet (next: ${nextDueAt(lastRenew, renewSite).toISOString().slice(0, 10)})`;
       await saveErrorLog({
         module: "createOrder",
         stage: "renewal_not_due",
@@ -603,7 +610,7 @@ const createOrder = asyncHandler(async (req, res) => {
 
   const dedupeBlockUntil = renewRef
     ? existingIsRecurring
-      ? addMonths(new Date(renewRef), DEDUPE_MONTHS)
+      ? recurringDedupeUntil(renewRef, siteOf(existingOrder)) // LA: +DEDUPE_MONTHS, WEHO: +30d
       : new Date(
           new Date(renewRef).getTime() +
             ONE_TIME_REORDER_DAYS * 24 * 60 * 60 * 1000,
@@ -739,8 +746,8 @@ const createOrder = asyncHandler(async (req, res) => {
        The cron does NOT read these — it recomputes from lastRenewAt. */
     ...(renewable
       ? {
-          nextOrderAt: nextDueAt(new Date()),
-          nextReminderAt: reminderAt(new Date()),
+          nextOrderAt: nextDueAt(new Date(), isLAOrder ? "la" : "weho"),
+          nextReminderAt: reminderAt(new Date(), isLAOrder ? "la" : "weho"),
         }
       : { nextOrderAt: null, nextReminderAt: null }),
     normalizedAddress: normalizedAddress1,
@@ -1644,7 +1651,7 @@ const validateAddressOnly = asyncHandler(async (req, res) => {
       isRecurring(existing.subscription) && existing.isActive !== false;
     const oneTimeDays = Number(process.env.ONE_TIME_REORDER_DAYS || 30);
     const until = recurring
-      ? addMonths(new Date(renewRef), DEDUPE_MONTHS)
+      ? recurringDedupeUntil(renewRef, siteOf(existing))
       : new Date(
           new Date(renewRef).getTime() + oneTimeDays * 24 * 60 * 60 * 1000,
         );

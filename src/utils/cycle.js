@@ -148,20 +148,144 @@ export function roundUpToFirst(date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
 }
 
+/* ================================================================== *
+ *  PER-SITE CYCLE RULES
+ *
+ *   LA    -> unchanged: CYCLE_MONTHS calendar months, snapped to the
+ *            1st, reminder REMINDER_BEFORE_DAYS before.
+ *   WEHO  -> every WEHO_CYCLE_DAYS days (default 30), no snapping,
+ *            reminder WEHO_REMINDER_BEFORE_DAYS (default 15) before.
+ *
+ *  Site comes from order.source. Only "Defent La" is LA; everything
+ *  else (incl. legacy null / "" / "weho") is WEHO — the same rule the
+ *  rest of the codebase uses for `flag`.
+ *
+ *  Every function below takes `site` LAST and defaults to LA, so a
+ *  caller that doesn't pass one gets exactly the old behaviour.
+ *  Always pass siteOf(order) — never order.source directly, because an
+ *  undefined source would fall into the LA default.
+ * ================================================================== */
+export const SITE_LA = "la";
+export const SITE_WEHO = "weho";
+export const LA_SOURCE = "Defent La";
+
+export const WEHO_CYCLE_DAYS = Number(process.env.WEHO_CYCLE_DAYS || 30);
+export const WEHO_REMINDER_BEFORE_DAYS = Number(
+  process.env.WEHO_REMINDER_BEFORE_DAYS || 15,
+);
+
+/** "la" | "weho" from an order doc, or from a source string. */
+export function siteOf(orderOrSource) {
+  const src =
+    typeof orderOrSource === "string" ? orderOrSource : orderOrSource?.source;
+  return src === LA_SOURCE ? SITE_LA : SITE_WEHO;
+}
+
+const reminderDaysFor = (site) =>
+  site === SITE_WEHO ? WEHO_REMINDER_BEFORE_DAYS : REMINDER_BEFORE_DAYS;
+
+/** Midnight UTC of the given date (the cycle key's day). */
+const startOfUTCDay = (date) => {
+  const d = new Date(date);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+};
+
 /** The date a subscription that last renewed at `renewAt` is next due. */
-export function nextDueAt(renewAt) {
+export function nextDueAt(renewAt, site = SITE_LA) {
+  if (site === SITE_WEHO) {
+    /* Counted from the start of the cycle-key day, so the JS check and
+       the Mongo dueAtExpr() below agree to the millisecond. */
+    return new Date(
+      startOfUTCDay(renewAt).getTime() + WEHO_CYCLE_DAYS * DAY_MS,
+    );
+  }
   const base = addMonths(new Date(renewAt), CYCLE_MONTHS);
   return SNAP_TO_FIRST ? roundUpToFirst(base) : base;
 }
 
 /** Is this subscription due for a shipment? */
-export function isDue(renewAt, now = Date.now()) {
-  return nextDueAt(renewAt).getTime() <= now;
+export function isDue(renewAt, now = Date.now(), site = SITE_LA) {
+  return nextDueAt(renewAt, site).getTime() <= now;
 }
 
 /** When should the reminder email go out for this cycle? */
-export function reminderAt(renewAt) {
-  return new Date(nextDueAt(renewAt).getTime() - REMINDER_BEFORE_DAYS * DAY_MS);
+export function reminderAt(renewAt, site = SITE_LA) {
+  return new Date(
+    nextDueAt(renewAt, site).getTime() - reminderDaysFor(site) * DAY_MS,
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ *  Mongo versions of nextDueAt / reminderAt, for aggregation pipelines.
+ *  Both crons MUST use these so they can never disagree with the JS
+ *  isDue() check in createOrder (a disagreement = a 409 loop).
+ *  The LA branch is the exact expression cron.js used before.
+ * ------------------------------------------------------------------ */
+export function dueAtExpr(renewAt = "$renewAt") {
+  const laBase = {
+    $dateAdd: { startDate: renewAt, unit: "month", amount: CYCLE_MONTHS },
+  };
+  const la = SNAP_TO_FIRST
+    ? {
+        $cond: [
+          { $eq: [{ $dayOfMonth: laBase }, 1] },
+          laBase,
+          {
+            $dateAdd: {
+              startDate: { $dateTrunc: { date: laBase, unit: "month" } },
+              unit: "month",
+              amount: 1,
+            },
+          },
+        ],
+      }
+    : laBase;
+
+  const weho = {
+    $dateAdd: {
+      startDate: { $dateTrunc: { date: renewAt, unit: "day" } },
+      unit: "day",
+      amount: WEHO_CYCLE_DAYS,
+    },
+  };
+
+  return { $cond: [{ $eq: ["$source", LA_SOURCE] }, la, weho] };
+}
+
+export function remindAtExpr(dueAt = "$dueAt") {
+  return {
+    $dateSubtract: {
+      startDate: dueAt,
+      unit: "day",
+      amount: {
+        $cond: [
+          { $eq: ["$source", LA_SOURCE] },
+          REMINDER_BEFORE_DAYS,
+          WEHO_REMINDER_BEFORE_DAYS,
+        ],
+      },
+    },
+  };
+}
+
+/** Household block for an ACTIVE recurring order at an address. */
+export function recurringDedupeUntil(renewRef, site = SITE_LA) {
+  if (site === SITE_WEHO) {
+    return new Date(new Date(renewRef).getTime() + WEHO_CYCLE_DAYS * DAY_MS);
+  }
+  return addMonths(new Date(renewRef), DEDUPE_MONTHS);
+}
+
+/** "monthly" / "quarterly" / ... for email copy. */
+export function cycleWordFor(site = SITE_LA) {
+  if (site === SITE_WEHO) {
+    return WEHO_CYCLE_DAYS === 30 ? "monthly" : `every-${WEHO_CYCLE_DAYS}-days`;
+  }
+  return CYCLE_MONTHS === 1
+    ? "monthly"
+    : CYCLE_MONTHS === 3
+      ? "quarterly"
+      : `every-${CYCLE_MONTHS}-months`;
 }
 
 /**
@@ -176,14 +300,15 @@ export function reminderAt(renewAt) {
  * ...so the next run doesn't immediately fire again and ship a backlog.
  * One outage, one parcel.
  */
-export function nextAnchor(cycleDate, now = Date.now()) {
+export function nextAnchor(cycleDate, now = Date.now(), site = SITE_LA) {
   /* Step along the SAME schedule nextDueAt() defines — with snapping on,
      the first step lands on a 1st and every later step stays on 1sts
-     (a 1st + 3 months is a 1st, and roundUpToFirst leaves it alone). */
-  let d = nextDueAt(new Date(cycleDate));
+     (a 1st + 3 months is a 1st, and roundUpToFirst leaves it alone).
+     WEHO steps in WEHO_CYCLE_DAYS increments. */
+  let d = nextDueAt(new Date(cycleDate), site);
   // Skip whole cycles that were missed entirely.
-  while (nextDueAt(d).getTime() <= now) {
-    d = nextDueAt(d);
+  while (nextDueAt(d, site).getTime() <= now) {
+    d = nextDueAt(d, site);
   }
   return d;
 }
@@ -195,8 +320,11 @@ export const cycleKeyFor = (order) =>
     .slice(0, 10);
 
 /** Days from now until the next shipment (for the email copy). */
-export function daysUntilDue(renewAt, now = Date.now()) {
-  return Math.max(0, Math.ceil((nextDueAt(renewAt).getTime() - now) / DAY_MS));
+export function daysUntilDue(renewAt, now = Date.now(), site = SITE_LA) {
+  return Math.max(
+    0,
+    Math.ceil((nextDueAt(renewAt, site).getTime() - now) / DAY_MS),
+  );
 }
 
 /** Human summary for the boot banner. */
@@ -207,5 +335,8 @@ export function cycleSummary() {
       : CYCLE_MONTHS === 3
         ? "quarterly"
         : `every ${CYCLE_MONTHS} months`;
-  return `${label} (+${CYCLE_MONTHS} calendar month${CYCLE_MONTHS === 1 ? "" : "s"}), reminder ${REMINDER_BEFORE_DAYS}d before shipment`;
+  return (
+    `LA ${label} (+${CYCLE_MONTHS} calendar month${CYCLE_MONTHS === 1 ? "" : "s"}), reminder ${REMINDER_BEFORE_DAYS}d before; ` +
+    `WEHO every ${WEHO_CYCLE_DAYS}d, reminder ${WEHO_REMINDER_BEFORE_DAYS}d before`
+  );
 }

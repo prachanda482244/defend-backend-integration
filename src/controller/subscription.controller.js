@@ -32,9 +32,11 @@
 import { OrderModel, ReminderLogModel } from "../model/orderModel.js";
 import {
   RECURRING_MATCH,
+  RECURRING_CANONICAL,
   isRecurring,
   nextDueAt,
   reminderAt,
+  siteOf,
 } from "../utils/cycle.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -279,20 +281,31 @@ export const resubscribe = asyncHandler(async (req, res) => {
     return res.status(400).json(new ApiResponse(400, null, "orderId required"));
   }
 
+  /* Read first so the next dates use this order's site schedule
+     (LA quarterly / WEHO 30 days). */
+  const current = await OrderModel.findById(orderId).select("source").lean();
+  if (!current) {
+    return res.status(404).json(new ApiResponse(404, null, "Order not found"));
+  }
+  const site = siteOf(current);
+  const now = new Date();
+
   const order = await OrderModel.findOneAndUpdate(
     { _id: orderId },
     {
       $set: {
-        subscription: RECURRING_MATCH,
+        /* Was RECURRING_MATCH — that's a query object ({ $in: [...] }),
+           not a value; it can't be stored in a String field. */
+        subscription: RECURRING_CANONICAL,
         isActive: true,
         isRenewable: true,
         unsubscribedAt: null,
         unsubscribeSource: "",
         // Restart the clock so they don't get renewed the instant they
         // re-enrol (their old lastRenewAt could be a whole cycle stale).
-        lastRenewAt: new Date(),
-        nextOrderAt: nextDueAt(new Date()),
-        nextReminderAt: reminderAt(new Date()),
+        lastRenewAt: now,
+        nextOrderAt: nextDueAt(now, site),
+        nextReminderAt: reminderAt(now, site),
       },
     },
     { new: true },

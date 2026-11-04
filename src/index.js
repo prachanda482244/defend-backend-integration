@@ -92,7 +92,8 @@ console.log(`
 │ Crons             renewal   ${process.env.RENEWAL_CRON || "0 0 * * * (default)"}
 │                   reminder  ${process.env.REMINDER_CRON || "0 9 * * * (default)"}
 │                   reconcile ${process.env.RECONCILE_CRON || "*/10 * * * * (default)"}
-│                   cycle=${process.env.RENEWAL_CYCLE_DAYS || 30}d  remind@${process.env.REMINDER_AFTER_DAYS || 15}d
+│                   LA   cycle=${process.env.RENEWAL_CYCLE_MONTHS || 3}mo  remind ${process.env.REMINDER_BEFORE_DAYS || 15}d before
+│                   WEHO cycle=${process.env.WEHO_CYCLE_DAYS || 30}d  remind ${process.env.WEHO_REMINDER_BEFORE_DAYS || 15}d before
 │
 │ Pacing            renewal   ${process.env.RENEWAL_DELAY_MS || 700}ms ${flag(process.env.RENEWAL_DELAY_MS, "15000")}
 │                   reconcile ${process.env.SHOPIFY_RECONCILE_DELAY_MS || 700}ms ${flag(process.env.SHOPIFY_RECONCILE_DELAY_MS, "15000")}

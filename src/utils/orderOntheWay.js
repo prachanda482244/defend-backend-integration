@@ -21,18 +21,12 @@
 import { sendOne, mailerReady } from "./mailer.js";
 import { buildUnsubUrl } from "./unsubscribeToken.js";
 import { orderOnTheWayEmail } from "./emailTemplates.js";
-import { CYCLE_MONTHS, isRecurring, nextDueAt } from "./cycle.js";
+import { isRecurring, nextDueAt, siteOf, cycleWordFor } from "./cycle.js";
 
 /* Kill switch, on by default. Set ORDER_EMAIL_ENABLED=false to silence
    the shipment email without a deploy. */
 const ENABLED = process.env.ORDER_EMAIL_ENABLED !== "false";
 
-const cycleWord = () =>
-  CYCLE_MONTHS === 1
-    ? "monthly"
-    : CYCLE_MONTHS === 3
-      ? "quarterly"
-      : `every-${CYCLE_MONTHS}-months`;
 
 /**
  * @param {object} order   the Mongo order document (lean is fine)
@@ -75,10 +69,10 @@ export async function sendOrderOnTheWay(
       orderNumber: orderName,
       shipToLine,
       nextRenewalDate: recurring
-        ? nextDueAt(order.lastRenewAt || order.createdAt)
+        ? nextDueAt(order.lastRenewAt || order.createdAt, siteOf(order))
         : null,
       unsubUrl,
-      cycleWord: recurring ? cycleWord() : "one-time",
+      cycleWord: recurring ? cycleWordFor(siteOf(order)) : "one-time",
     });
 
     await sendOne(

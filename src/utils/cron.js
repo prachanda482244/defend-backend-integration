@@ -19,12 +19,7 @@ const REMIX_URL = () => resolveRemixUrl();
 /* ++ QUARTERLY ++  The cycle is now CALENDAR MONTHS, not days.
    90-day counting drifts (Apr 1 + 90d = Jun 30, not Jul 1) and never
    recovers. See cycle.js for the full reasoning. */
-import {
-  CYCLE_MONTHS,
-  SNAP_TO_FIRST,
-  cycleSummary,
-  RECURRING_MATCH,
-} from "./cycle.js";
+import { dueAtExpr, cycleSummary, RECURRING_MATCH } from "./cycle.js";
 
 const LOCK_NAME = "recurring-renewals";
 const LOCK_TTL_MS = 30 * 60 * 1000;
@@ -100,38 +95,9 @@ async function findDueRenewals() {
        (Jun 17 -> Oct 1 -> Jan 1 -> Apr 1.) The two computations MUST
        agree, or the cron would claim renewals the API's isDue() then
        rejects as not-due — a 409 loop. */
-    {
-      $addFields: {
-        dueBase: {
-          $dateAdd: {
-            startDate: "$renewAt",
-            unit: "month",
-            amount: CYCLE_MONTHS,
-          },
-        },
-      },
-    },
-    {
-      $addFields: {
-        dueAt: SNAP_TO_FIRST
-          ? {
-              $cond: [
-                { $eq: [{ $dayOfMonth: "$dueBase" }, 1] },
-                "$dueBase",
-                {
-                  $dateAdd: {
-                    startDate: {
-                      $dateTrunc: { date: "$dueBase", unit: "month" },
-                    },
-                    unit: "month",
-                    amount: 1,
-                  },
-                },
-              ],
-            }
-          : "$dueBase",
-      },
-    },
+    /* Per-site: LA = the rule above (unchanged), WEHO = renewAt's day
+       + WEHO_CYCLE_DAYS. Shared with reminderCron via cycle.js. */
+    { $addFields: { dueAt: dueAtExpr("$renewAt") } },
     { $match: { dueAt: { $lte: now } } },
 
     /* ++ NEW ++  DON'T TOUCH A CYCLE THAT'S ALREADY BEEN STARTED.
