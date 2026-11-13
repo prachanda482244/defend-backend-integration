@@ -77,6 +77,9 @@ app.use(errorMiddleware);
 const mask = (v) =>
   v ? `${String(v).slice(0, 6)}…(${String(v).length})` : "❌ NOT SET";
 const flag = (v, want) => (v === want ? "✓" : "⚠");
+/* Hide the password in a connection string: mongodb://user:****@host... */
+const maskUri = (v) =>
+  v ? String(v).replace(/(\/\/[^:/@]+:)[^@]*@/, "$1****@") : "❌ NOT SET";
 
 const REMIX_URL_RESOLVED =
   process.env.SHOPIFY_APP_URL ||
@@ -86,7 +89,7 @@ console.log(`
 ┌─ DEFENT BACKEND ────────────────────────────────────────────────
 │ Shopify app URL   ${REMIX_URL_RESOLVED}
 │                   ${process.env.SHOPIFY_APP_URL ? "✓ from SHOPIFY_APP_URL" : "⚠ FALLBACK — SHOPIFY_APP_URL is not set, this is the PROD app"}
-│ Mongo             ${process.env.MONGODB_URI || "❌ NOT SET"}
+│ Mongo             ${maskUri(process.env.MONGODB_URI)}
 │ Public API URL    ${process.env.PUBLIC_API_URL || "❌ NOT SET (unsubscribe links will throw)"}
 │
 │ Crons             renewal   ${process.env.RENEWAL_CRON || "0 0 * * * (default)"}
